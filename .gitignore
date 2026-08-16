@@ -4,6 +4,11 @@ obj/
 *.user
 .vs/
 
+## App runtime data (Issue/テンプレート/実行ログ等のユーザーローカルデータ)
+## 注意: Windowsはファイルパスが大文字小文字を区別しないため、C#の"Data/"フォルダと
+## 衝突しない名前にすること（過去に"data/"と命名して誤って削除した事故があった）
+src/ClaudeCodeGui/runtime-data/
+
 ## Node (frontend build tooling, if introduced later)
 node_modules/
 

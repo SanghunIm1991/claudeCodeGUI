@@ -3,9 +3,72 @@
 <head>
   <meta charset="utf-8" />
   <title>claudeCodeGUI</title>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <h1>claudeCodeGUI</h1>
-  <p>プロトタイプ準備中です。</p>
+  <header>
+    <h1>claudeCodeGUI</h1>
+    <nav>
+      <button id="nav-issues" class="nav-btn active">Issue</button>
+      <button id="nav-templates" class="nav-btn">プロンプトテンプレート</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-issues" class="view">
+      <div class="columns">
+        <div class="col col-list">
+          <h2>Issue一覧</h2>
+          <ul id="issue-list" class="item-list"></ul>
+          <h3>新規Issue</h3>
+          <form id="issue-form">
+            <label>タイトル<input type="text" id="issue-title" required /></label>
+            <label>説明<textarea id="issue-description" rows="3"></textarea></label>
+            <label>対象プロジェクトパス<input type="text" id="issue-target-path" placeholder="D:\path\to\project" required /></label>
+            <button type="submit">作成</button>
+          </form>
+        </div>
+
+        <div class="col col-detail">
+          <div id="issue-detail">
+            <p class="hint">左のIssue一覧から選択してください。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-templates" class="view" hidden>
+      <div class="columns">
+        <div class="col col-list">
+          <h2>プロンプトテンプレート</h2>
+          <ul id="template-list" class="item-list"></ul>
+          <h3>新規テンプレート</h3>
+          <form id="template-form">
+            <label>工程
+              <select id="template-stage">
+                <option value="requirements">要件定義</option>
+                <option value="design">設計</option>
+                <option value="implementation">実装</option>
+                <option value="testing">テスト</option>
+                <option value="deployment">デプロイ</option>
+              </select>
+            </label>
+            <label>名前<input type="text" id="template-name" required /></label>
+            <label>本文（{{issue.title}} 等のプレースホルダ使用可）
+              <textarea id="template-body" rows="6" required></textarea>
+            </label>
+            <button type="submit">作成</button>
+          </form>
+        </div>
+        <div class="col col-detail">
+          <div id="template-detail">
+            <p class="hint">左の一覧から選択すると編集・削除できます。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
 </body>
 </html>
