@@ -1,0 +1,12 @@
+## .NET
+bin/
+obj/
+*.user
+.vs/
+
+## Node (frontend build tooling, if introduced later)
+node_modules/
+
+## OS
+Thumbs.db
+.DS_Store
