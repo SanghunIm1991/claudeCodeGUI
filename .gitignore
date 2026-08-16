@@ -12,6 +12,10 @@ src/ClaudeCodeGui/runtime-data/
 ## Node (frontend build tooling, if introduced later)
 node_modules/
 
+## Python (対象プロジェクト側で生成されるキャッシュ等。例: demo/)
+__pycache__/
+*.pyc
+
 ## OS
 Thumbs.db
 .DS_Store
