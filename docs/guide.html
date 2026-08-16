@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>claudeCodeGUI 操作ガイド</title>
+<style>
+  :root {
+    --bg: #f3f5f8;
+    --surface: #ffffff;
+    --surface-alt: #eaeff5;
+    --text: #1b2430;
+    --text-muted: #5b6675;
+    --border: #d7dee7;
+    --accent: #2a5db0;
+    --accent-soft: #e4ecfa;
+    --accent-strong: #17407e;
+    --warn: #96690a;
+    --warn-soft: #fbf1da;
+    --code-bg: #101826;
+    --code-text: #d7e3f5;
+    --code-border: #24334a;
+    --font-body: "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", "Segoe UI", sans-serif;
+    --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1620;
+      --surface: #16202c;
+      --surface-alt: #1c2836;
+      --text: #e4eaf2;
+      --text-muted: #93a2b5;
+      --border: #29394b;
+      --accent: #86b1f2;
+      --accent-soft: #1e2e45;
+      --accent-strong: #b7d2f8;
+      --warn: #e2b752;
+      --warn-soft: #2e2712;
+      --code-bg: #0a0f16;
+      --code-text: #c9d8ed;
+      --code-border: #1b2636;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.9;
+    font-size: 16px;
+  }
+
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, summary:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.6rem;
+  }
+  h1 {
+    font-size: 2rem;
+    line-height: 1.35;
+    margin: 0 0 0.75rem;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .dek {
+    color: var(--text-muted);
+    font-size: 1.02rem;
+    max-width: 62ch;
+    margin: 0 0 1.4rem;
+  }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .meta-chip {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+  }
+
+  nav.toc {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    padding: 1rem 0;
+    margin: 2rem 0 0.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+  }
+  nav.toc a {
+    flex: 0 0 auto;
+    font-size: 0.82rem;
+    text-decoration: none;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    white-space: nowrap;
+  }
+  nav.toc a:hover { color: var(--accent); border-color: var(--accent); }
+
+  section { padding-top: 3rem; scroll-margin-top: 4.5rem; }
+  section > h2 { font-size: 1.35rem; margin: 0 0 0.4rem; letter-spacing: -0.01em; }
+  section > .section-note { color: var(--text-muted); font-size: 0.92rem; margin: 0 0 1.6rem; max-width: 62ch; }
+
+  ul.checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.8rem; }
+  ul.checklist li {
+    display: flex;
+    gap: 0.7rem;
+    align-items: flex-start;
+    padding: 0.85rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  ul.checklist li::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 0.85rem;
+    height: 0.85rem;
+    margin-top: 0.3rem;
+    border: 2px solid var(--accent);
+    border-radius: 3px;
+  }
+
+  ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  ol.steps li { counter-increment: step; display: flex; gap: 1.1rem; padding-bottom: 1.9rem; position: relative; }
+  ol.steps li::after {
+    content: "";
+    position: absolute;
+    left: 1.05rem;
+    top: 2.4rem;
+    bottom: 0.2rem;
+    width: 1px;
+    background: var(--border);
+  }
+  ol.steps li:last-child::after { display: none; }
+  .step-num {
+    flex: 0 0 auto;
+    width: 2.15rem;
+    height: 2.15rem;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+  }
+  .step-num::before { content: counter(step); }
+  .step-body { flex: 1; min-width: 0; padding-top: 0.2rem; }
+  .step-body h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
+  .step-body p { margin: 0 0 0.6rem; }
+  .step-body p:last-child { margin-bottom: 0; }
+
+  pre.term-block, code.inline { background: var(--code-bg); color: var(--code-text); font-family: var(--font-mono); }
+  pre.term-block {
+    border: 1px solid var(--code-border);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    font-size: 0.84rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    margin: 0.6rem 0 0.8rem;
+  }
+  code.inline { border-radius: 4px; padding: 0.08rem 0.4rem; font-size: 0.86em; }
+
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 0.8rem 1rem;
+    margin: 0.7rem 0 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .callout .label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+  }
+  .callout p { margin: 0; font-size: 0.92rem; }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+  .callout.warn .label { color: var(--warn); }
+
+  .path-table { width: 100%; overflow-x: auto; margin-top: 1rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td code { font-family: var(--font-mono); font-size: 0.85rem; }
+
+  .glossary-group { margin-bottom: 2rem; }
+  .glossary-group h3 {
+    font-size: 0.78rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 0.9rem;
+    font-family: var(--font-mono);
+  }
+  dl.glossary { margin: 0; }
+  .term { padding: 0.9rem 0; border-bottom: 1px solid var(--border); }
+  .term:last-child { border-bottom: none; }
+  .term dt {
+    font-weight: 600;
+    color: var(--accent-strong);
+    margin-bottom: 0.35rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .term dt .en { font-family: var(--font-mono); font-weight: 400; font-size: 0.82rem; color: var(--text-muted); }
+  .term dd { margin: 0; color: var(--text); font-size: 0.94rem; }
+  .term dd .used-here { display: block; margin-top: 0.4rem; font-size: 0.86rem; color: var(--text-muted); }
+  .term dd .used-here::before { content: "本アプリでは: "; color: var(--text-muted); }
+
+  details.faq {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    padding: 0.2rem 1rem;
+    margin-bottom: 0.6rem;
+  }
+  details.faq summary { cursor: pointer; padding: 0.8rem 1.6rem 0.8rem 0; font-weight: 600; list-style: none; position: relative; }
+  details.faq summary::-webkit-details-marker { display: none; }
+  details.faq summary::after {
+    content: "+";
+    position: absolute;
+    right: 0;
+    top: 0.7rem;
+    color: var(--accent);
+    font-family: var(--font-mono);
+  }
+  details.faq[open] summary::after { content: "\2212"; }
+  details.faq .faq-a { padding: 0 0 1rem; color: var(--text-muted); font-size: 0.93rem; }
+  details.faq .faq-a code.inline { color: var(--code-text); }
+
+  footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Local Verification Guide</p>
+    <h1>claudeCodeGUI を実際に触ってみる</h1>
+    <p class="dek">Issue登録から工程実行、成果物の確認までを自分の手で一通り動かすための手順書です。あわせて、実装に使った技術要素を用語ごとに解説します。</p>
+    <div class="meta-row">
+      <span class="meta-chip">repo: D:\claudeCodeGUI</span>
+      <span class="meta-chip">app: http://localhost:5037</span>
+      <span class="meta-chip">stack: ASP.NET Core + 素のJS</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <a href="#prereq">事前準備</a>
+    <a href="#startup">起動</a>
+    <a href="#handson">操作手順</a>
+    <a href="#paths">パス早見表</a>
+    <a href="#glossary">用語解説</a>
+    <a href="#faq">困ったとき</a>
+  </nav>
+
+  <section id="prereq">
+    <h2>1. 事前準備</h2>
+    <p class="section-note">3点だけ確認すればすぐ試せます。</p>
+    <ul class="checklist">
+      <li>.NET SDKが入っている（確認済み: 9.0.314。ターミナルで <code class="inline">dotnet --version</code>）</li>
+      <li><code class="inline">claude</code> CLIがインストール・ログイン済み（本アプリは <code class="inline">C:\Users\21452\.local\bin\claude.exe</code> を呼び出す設定。変更する場合は <code class="inline">src/ClaudeCodeGui/appsettings.json</code> の <code class="inline">ClaudeCli:Path</code>）</li>
+      <li>試用に使える空フォルダを1つ用意する（例: <code class="inline">C:\temp\try-claudecodegui</code>）。最初から大事なリポジトリを指定しない</li>
+    </ul>
+  </section>
+
+  <section id="startup">
+    <h2>2. 起動する</h2>
+    <ol class="steps">
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>リポジトリのルートでアプリを起動</h3>
+          <pre class="term-block">cd D:\claudeCodeGUI
+dotnet run --project src/ClaudeCodeGui/ClaudeCodeGui.csproj</pre>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>ブラウザで開く</h3>
+          <p><code class="inline">Now listening on: http://localhost:5037</code> の表示を確認したら、ブラウザで <code class="inline">http://localhost:5037</code> を開く（自動起動しない場合は手動で）。</p>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>（任意）ヘルスチェック</h3>
+          <p><code class="inline">http://localhost:5037/api/health</code> にアクセスし <code class="inline">{"status":"ok"}</code> が返れば正常起動。</p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section id="handson">
+    <h2>3. 操作してみる</h2>
+    <p class="section-note">Issueを1件作り、工程を実行して、成果物を確認するまでの一連の流れです。</p>
+    <ol class="steps">
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>プロンプトテンプレートを確認する</h3>
+          <p>上部ナビ「プロンプトテンプレート」を開くと、初回起動時に自動生成された5件（要件定義・設計・実装・テスト・デプロイ）が並んでいます。内容はその場で編集できます。</p>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>Issueを新規作成する</h3>
+          <p>「Issue」タブの「新規Issue」フォームに、タイトル・説明・対象プロジェクトパスを入力して作成します。</p>
+          <div class="callout">
+            <span class="label">Check</span>
+            <p>対象プロジェクトパスは実在するフォルダの絶対パスである必要があります。存在しないパスを指定すると、工程実行は即座に失敗します。</p>
+          </div>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>工程を選んで実行する</h3>
+          <p>作成したIssueを一覧から選ぶと詳細画面が開きます。「工程実行」欄でテンプレートとパーミッションモードを選び「実行」を押します。</p>
+          <div class="callout warn">
+            <span class="label">注意</span>
+            <p><code class="inline">bypassPermissions</code> はファイル編集などをすべて自動承認します。試用フォルダ以外では選ばないでください。迷ったら既定の <code class="inline">acceptEdits</code> のままで構いません。</p>
+          </div>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>ログをリアルタイムに眺める</h3>
+          <p><code class="inline">claude</code> CLIが対象フォルダをカレントディレクトリにしてバックグラウンドで起動し、その出力が下のログ欄に流れ込みます。ページを閉じずに待ちます。</p>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>実行履歴で結果を確認する</h3>
+          <p>完了すると「実行履歴」に工程名・状態（succeeded / failed など）・結果の要約が1行追加されます。</p>
+        </div>
+      </li>
+      <li>
+        <span class="step-num"></span>
+        <div class="step-body">
+          <h3>成果物を見て、直接編集する</h3>
+          <p>画面下部の「成果物」欄で対象プロジェクト配下のファイルを一覧・閲覧できます。ファイルをクリックするとエディタに読み込まれ、「保存」で書き戻せます。</p>
+        </div>
+      </li>
+    </ol>
+    <p style="color:var(--text-muted); font-size:0.88rem;">終了するときはターミナルで <code class="inline">Ctrl+C</code>。</p>
+  </section>
+
+  <section id="paths">
+    <h2>パス早見表</h2>
+    <div class="path-table">
+      <table>
+        <thead><tr><th>用途</th><th>値</th></tr></thead>
+        <tbody>
+          <tr><td>リポジトリルート</td><td><code>D:\claudeCodeGUI</code></td></tr>
+          <tr><td>起動コマンド</td><td><code>dotnet run --project src/ClaudeCodeGui/ClaudeCodeGui.csproj</code></td></tr>
+          <tr><td>アプリURL</td><td><code>http://localhost:5037</code></td></tr>
+          <tr><td>ヘルスチェック</td><td><code>http://localhost:5037/api/health</code></td></tr>
+          <tr><td>データ保存先</td><td><code>src/ClaudeCodeGui/runtime-data/</code>（Issue・テンプレート・実行ログ）</td></tr>
+          <tr><td>claude CLI設定</td><td><code>src/ClaudeCodeGui/appsettings.json</code> の <code>ClaudeCli:Path</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="glossary">
+    <h2>4. 使った技術要素の解説</h2>
+    <p class="section-note">辞書的な定義ではなく、このアプリの中で実際にどう使われているかを添えています。</p>
+
+    <div class="glossary-group">
+      <h3>バックエンドの土台</h3>
+      <dl class="glossary">
+        <div class="term">
+          <dt>ASP.NET Core / Minimal API <span class="en">ASP.NET Core, Minimal API</span></dt>
+          <dd>C#で書くWebアプリの土台。コントローラークラスを作らず、<code class="inline">Program.cs</code>内で<code class="inline">app.MapGet(...)</code>のように直接エンドポイントを書く軽量な流儀を採用。
+            <span class="used-here">Issue・テンプレート・工程実行・成果物のAPIはすべてこの形式で<code class="inline">Program.cs</code>に定義。</span>
+          </dd>
+        </div>
+        <div class="term">
+          <dt>Kestrel <span class="en">built-in web server</span></dt>
+          <dd>ASP.NET Coreに内蔵のWebサーバー本体。<code class="inline">dotnet run</code>で起動した際、実際にHTTPリクエストを受けているのはこれ。</dd>
+        </div>
+        <div class="term">
+          <dt>wwwroot / 静的ファイル配信 <span class="en">UseStaticFiles</span></dt>
+          <dd>ビルドせずにHTML/CSS/JSをそのまま配信する仕組み。
+            <span class="used-here"><code class="inline">wwwroot/index.html</code>・<code class="inline">app.js</code>・<code class="inline">styles.css</code>がこの仕組みで配信されるフロントエンド一式。</span>
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="glossary-group">
+      <h3>claude CLIの実行エンジン</h3>
+      <dl class="glossary">
+        <div class="term">
+          <dt>headlessモード <span class="en">-p / --print</span></dt>
+          <dd>対話画面を出さず、1回のプロンプトを渡して結果を受け取ったら終了するCLIの動作形態。
+            <span class="used-here">「工程実行」ボタンを押すと、このモードで<code class="inline">claude</code>をサブプロセス起動する。</span>
+          </dd>
+        </div>
+        <div class="term">
+          <dt>stream-json出力形式 <span class="en">--output-format stream-json</span></dt>
+          <dd>headlessモードの出力形式の一つ。処理の進行に合わせて1行1つのJSONが逐次出力される。
+            <span class="used-here">出力を1行ずつ読み取り、ログファイルへの追記とブラウザへの配信を同時に行っている。</span>
+          </dd>
+        </div>
+        <div class="term">
+          <dt>permission-mode <span class="en">acceptEdits / bypassPermissions / plan</span></dt>
+          <dd>ファイル編集やコマンド実行のたびに許可を求めるかどうかを決める動作モード。対話画面がないheadless実行では承認する人がいないため、事前に指定する必要がある。
+            <span class="used-here">工程実行フォームのプルダウンで選択。既定は編集のみ自動承認する<code class="inline">acceptEdits</code>。</span>
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="glossary-group">
+      <h3>ブラウザとの通信</h3>
+      <dl class="glossary">
+        <div class="term">
+          <dt>SSE（Server-Sent Events） <span class="en">text/event-stream</span></dt>
+          <dd>サーバーからブラウザへ一方向にテキストを流し込み続けるHTTPの仕組み。チャットのような双方向通信（WebSocket）より単純で、ログ配信のような一方向の用途に向く。
+            <span class="used-here"><code class="inline">/api/runs/{id}/stream</code>エンドポイントが実行ログをこの形式で流す。</span>
+          </dd>
+        </div>
+        <div class="term">
+          <dt>EventSource <span class="en">JavaScript API</span></dt>
+          <dd>ブラウザ標準のJavaScript API。SSEのURLを渡すだけで、届いた行を順番にイベントとして受け取れる。
+            <span class="used-here"><code class="inline">app.js</code>内でログ欄への逐次描画に使用。</span>
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="glossary-group">
+      <h3>データの持ち方・安全対策</h3>
+      <dl class="glossary">
+        <div class="term">
+          <dt>ファイルベースJSON永続化 <span class="en">JsonFileStore</span></dt>
+          <dd>データベースを使わず、1件のレコードを1つのJSONファイルとして保存する方式。個人用のローカルツールという前提でシンプルさを優先した。
+            <span class="used-here">Issue・テンプレート・実行履歴が、それぞれ<code class="inline">runtime-data/issues|templates|runs/</code>配下に1件1ファイルで保存される。</span>
+          </dd>
+        </div>
+        <div class="term">
+          <dt>プレースホルダ置換 <span class="en">{{issue.title}} など</span></dt>
+          <dd>プロンプトテンプレート内の文字列を、実際のIssueの値に文字列置換で差し込む仕組み。</dd>
+        </div>
+        <div class="term">
+          <dt>パストラバーサル対策 <span class="en">path traversal</span></dt>
+          <dd><code class="inline">../</code>のような相対パスを使って、意図した範囲の外にあるファイルへアクセスされることを防ぐ対策。
+            <span class="used-here">成果物ブラウザは、解決後のパスが対象プロジェクトフォルダの外に出ないことを毎回検証している。</span>
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>5. 困ったときは</h2>
+    <details class="faq">
+      <summary>ブラウザが自動で開かない／ページが表示されない</summary>
+      <div class="faq-a">ターミナルのログでポート番号を確認し、手動でアクセスしてください。すでに同じポートで別プロセスが起動していると、起動時にエラーが表示されます。その場合は既存の<code class="inline">dotnet</code>プロセスを終了してから再実行してください。</div>
+    </details>
+    <details class="faq">
+      <summary>工程実行がすぐに<code class="inline">failed</code>になる</summary>
+      <div class="faq-a">まず対象プロジェクトパスが実在するフォルダかどうかを確認してください。存在しない場合は即座に失敗します。実行履歴の結果欄にエラーメッセージが表示されます。</div>
+    </details>
+    <details class="faq">
+      <summary><code class="inline">claude</code>コマンドが見つからないというエラーになる</summary>
+      <div class="faq-a"><code class="inline">src/ClaudeCodeGui/appsettings.json</code>の<code class="inline">ClaudeCli:Path</code>が、実際にインストールされている場所と一致しているか確認してください。</div>
+    </details>
+    <details class="faq">
+      <summary>ログが途中で流れなくなった</summary>
+      <div class="faq-a">現状のSSE実装は簡易的で、接続が切れても自動で再購読はしません。ページを再読み込みしてから工程をもう一度実行してください。</div>
+    </details>
+  </section>
+
+  <footer>
+    このファイルは <code class="inline">docs/guide.html</code> です。アプリ本体の最新情報は常にリポジトリの <code class="inline">README.md</code> を参照してください。
+  </footer>
+</div>
+</body>
+</html>
