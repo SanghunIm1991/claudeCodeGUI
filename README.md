@@ -31,8 +31,21 @@ Claude Codeとバイブコーディングによる「ウォーターフォール
 - `PromptTemplate`: 工程ごとのプロンプト（`{{issue.title}}`等のプレースホルダ対応）
 - `Run`: 実行履歴（状態・終了コード・結果サマリ）
 
+### 実際に動かして分かったこと・直した問題
+
+- headless実行(`claude -p`)は対話不可の単発実行のため、呼び出したセッションが確認質問を返すと
+  成果物が生成されないまま実行が終了する（=「止まった」ように見える）問題があった。
+  `--append-system-prompt`で「質問せず妥当な前提を置いて進める」旨を常時付与することで緩和済み
+  （`Services/ClaudeRunEngine.cs`）。将来の自律ループモードにも必須の前提。
+- `D:\claudeCodeGUI\demo`に実際にHello World tkinterアプリを要件定義〜実装まで一通り生成させ、
+  動作を確認済み（ツールが管理する対象プロジェクトの実例）。
+- 操作手順書(`docs/guide.html`)と設計概要(`docs/architecture-overview.md`)を追加。
+  claude.aiのArtifact機能はログインアカウント不一致でNot Foundになったため、
+  ドキュメント類はリポジトリ内のローカルファイルとして提供する方針にしている。
+
 ## 次のステップ
 
 - 自律ループモード（工程完了後の自動継続実行）
 - UIの見た目調整・実運用での使用感の確認
 - 実行のパーミッションモード（`acceptEdits`/`bypassPermissions`等）の扱いを再検討
+- SSEの自動再接続、同一Issueへの同時実行の排他制御（詳細は`docs/architecture-overview.md`の「既知の制約」）
