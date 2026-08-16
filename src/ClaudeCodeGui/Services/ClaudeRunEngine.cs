@@ -13,6 +13,11 @@ namespace ClaudeCodeGui.Services;
 /// </summary>
 public class ClaudeRunEngine
 {
+    private const string HeadlessGuidance =
+        "あなたは対話不可のheadless実行(claude -p)で1回だけ呼び出されています。人間に質問して回答を待つことはできません。" +
+        "要件や仕様が不明確な場合でも、質問だけを返して停止せず、妥当な前提を明示的に書き添えたうえで、" +
+        "可能な範囲まで作業を進めて具体的な成果物（要件定義書・設計書・コード等）を出力してください。";
+
     private readonly string _claudeCliPath;
     private readonly string _logDir;
     private readonly JsonFileStore<Run> _runStore;
@@ -83,6 +88,8 @@ public class ClaudeRunEngine
         psi.ArgumentList.Add("--verbose");
         psi.ArgumentList.Add("--permission-mode");
         psi.ArgumentList.Add(permissionMode);
+        psi.ArgumentList.Add("--append-system-prompt");
+        psi.ArgumentList.Add(HeadlessGuidance);
 
         string? lastResultLine = null;
 
