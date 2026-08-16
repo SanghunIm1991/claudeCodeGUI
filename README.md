@@ -42,6 +42,8 @@ Claude Codeとバイブコーディングによる「ウォーターフォール
 - 操作手順書(`docs/guide.html`)と設計概要(`docs/architecture-overview.md`)を追加。
   claude.aiのArtifact機能はログインアカウント不一致でNot Foundになったため、
   ドキュメント類はリポジトリ内のローカルファイルとして提供する方針にしている。
+- 設計概要だけでは「重要な処理がどこにあるか」を探しにくいとの声を受け、
+  クラス・関数単位の逆引きリファレンス(`docs/class-function-design.md`)を追加。
 
 ## 次のステップ
 
