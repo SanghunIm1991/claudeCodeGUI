@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "PowerShell(dotnet build *)",
+      "Bash(dotnet run *)",
+      "PowerShell(dotnet run *)",
+      "Bash(dotnet test *)",
+      "PowerShell(dotnet test *)"
+    ],
+    "deny": [
+      "Bash(git merge *)",
+      "PowerShell(git merge *)",
+      "Bash(git rebase *)",
+      "PowerShell(git rebase *)",
+      "Bash(git filter-branch *)",
+      "PowerShell(git filter-branch *)",
+      "Bash(git filter-repo *)",
+      "PowerShell(git filter-repo *)",
+      "Bash(git commit *--amend*)",
+      "PowerShell(git commit *--amend*)",
+      "Bash(git reset *--hard*)",
+      "PowerShell(git reset *--hard*)",
+      "Bash(git push *--force*)",
+      "PowerShell(git push *--force*)",
+      "Bash(git push -f*)",
+      "PowerShell(git push -f*)",
+      "Bash(git push * -f*)",
+      "PowerShell(git push * -f*)",
+      "Bash(git push *--delete*)",
+      "PowerShell(git push *--delete*)",
+      "Bash(git branch *-D*)",
+      "PowerShell(git branch *-D*)",
+      "Bash(git clean *-f*)",
+      "PowerShell(git clean *-f*)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}
