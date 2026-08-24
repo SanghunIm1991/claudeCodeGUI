@@ -51,6 +51,6 @@ Claude Codeとバイブコーディングによる「ウォーターフォール
 
 - モック実行モード（claude CLIが無い/未認証の環境でも固定サンプル出力でデモできるようにする。要件は`docs/architecture-overview.md`の「4.1 モック実行モード」で確定済み、実装は未着手）
 - 自律ループモード（工程完了後の自動継続実行）
-- UIの見た目調整・実運用での使用感の確認
+- UIの見た目調整・実運用での使用感の確認（デモ実行で視認性の課題を確認済み。色使い・配置の改善要件を`docs/architecture-overview.md`の「4.2 GUI視認性の改善」に追加、詳細は未確定・今後の設計で検討）
 - 実行のパーミッションモード（`acceptEdits`/`bypassPermissions`等）の扱いを再検討
 - SSEの自動再接続、同一Issueへの同時実行の排他制御（詳細は`docs/architecture-overview.md`の「既知の制約」）
