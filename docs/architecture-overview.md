@@ -8,7 +8,7 @@
 1. [全体像](#1-全体像)
 2. [レイヤ構成](#2-レイヤ構成)
 3. [「工程実行」の流れ](#3-工程実行の流れ)
-4. [主な設計判断](#4-主な設計判断)
+4. [主な設計判断](#4-主な設計判断)（[4.1 モック実行モード](#41-モック実行モード要件確定未実装)を含む）
 5. [ASP.NET Coreの考え方（補足）](#5-aspnet-coreの考え方補足)
 6. [claude CLIを外部から使う仕組み（補足）](#6-claude-cliを外部から使う仕組み補足)
 7. [既知の制約](#7-既知の制約)
@@ -106,6 +106,21 @@ flowchart LR
 | 本ツール自体のデータ | ファイルベースJSON（`JsonFileStore`） | 単一ユーザー・ローカル利用なのでDBサーバーは過剰 | `Data/JsonFileStore.cs:9-71` |
 | claude CLIの実行方式 | 非同期起動 + SSEでログ配信 | 工程実行は数十秒〜数分かかるため、ブラウザをブロックしない | `Program.cs:118-119`（`202 Accepted`）、`Services/ClaudeRunEngine.cs:62`（`Task.Run`） |
 | headless実行が質問してしまう問題 | `--append-system-prompt`で「質問せず前提を置いて進める」と常時指示 | headlessは対話不可のため、質問された時点で実質的に手詰まりになるのを防ぐ | `Services/ClaudeRunEngine.cs:16-19`（指示文の定義）、91-92行目（起動引数への追加） |
+
+### 4.1 モック実行モード（要件確定・未実装）
+
+claude CLIが無い/未認証の環境でも本ツールの動作を見せられるようにするための要件。2026-08-24に要件のみ確定。実装は別途着手する。
+
+| # | 論点 | 決定内容 |
+|---|---|---|
+| 1 | 目的 | (a) claude CLI未導入/未認証の第三者へのデモ・配布用、(b) 自分の開発中に実際のAPI呼び出しを避けるための開発用モック。両方を満たす |
+| 2 | 有効化方法 | `appsettings.json`に`ClaudeCli:MockMode`(bool)を追加し明示的にON/OFF可能にする。加えて、設定済みCLIパスが実行不可（ファイル不在等）と判定された場合は`MockMode`の値によらず自動的にモック実行へフォールバックする |
+| 3 | UIトグル | 追加しない。Run単位の切替はせず、アプリ全体の挙動として`appsettings.json`のみで統一する |
+| 4 | モック内容 | Issueの実データ（title/description等）に依存しない、工程（Stage: `requirements`/`design`/`implementation`/`testing`/`deployment`）ごとの汎用サンプルテキストを都度組み立てる |
+| 5 | 配信方式 | 即座に全行を返す（意図的な遅延なし）。SSE配信・`Run`状態遷移（`running`→`succeeded`）の経路は本番実行と共通のまま通す |
+| 6 | 出力フォーマット | 実際のstream-json行のうち、フロントエンド（`wwwroot/app.js`の`appendLogLine`）が解釈する3種類を再現する：`type:"system"`（`session_id`を持つinit行）・`type:"assistant"`（`message.content[].text`にサンプルテキスト）・`type:"result"`（`is_error`/`result`）。既存の`ApplyResult`（`Services/ClaudeRunEngine.cs:134-154`、最終行の`type:"result"`パースで`Run.Status`を確定）をそのまま流用できる形にする |
+| 7 | ファイル書き込み | 対象プロジェクト（`issue.TargetProjectPath`）への実ファイル生成は一切行わない。ログ出力のみ |
+| 8 | 履歴上の区別 | `Models/Run.cs`に`IsMock`(bool)フラグを追加し、Run一覧・詳細表示でモック実行だと分かるようにする |
 
 ## 5. ASP.NET Coreの考え方（補足）
 
