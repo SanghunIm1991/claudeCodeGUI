@@ -1,8 +1,9 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --border: #d0d0d5;
   --bg-subtle: #f5f5f7;
   --accent: #3a5fd9;
+  --bg: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -10,6 +11,7 @@
 body {
   font-family: -apple-system, "Segoe UI", "Hiragino Sans", sans-serif;
   margin: 0;
+  background: var(--bg);
   color: #1c1c1f;
 }
 
