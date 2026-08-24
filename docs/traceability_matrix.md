@@ -4,56 +4,74 @@
 
 ## ①要件×コンポーネント
 
-要件定義工程完了（2026-08-24）。出典: `docs/01_requirements/requirements.md`。コンポーネント列はコンポーネント設計工程で埋める。
+要件定義工程完了（2026-08-24）。コンポーネント設計工程完了（2026-08-24）。出典: `docs/01_requirements/requirements.md`、`docs/02_component_design/component_design.md`。
 
 | REQ/NFR/CON ID | COMP-xx |
 |---|---|
-| REQ-01 | |
-| REQ-02 | |
-| REQ-03 | |
-| CON-01 | |
-| REQ-04 | |
-| REQ-05 | |
-| CON-02 | |
-| CON-03 | |
-| REQ-06 | |
-| CON-04 | |
-| NFR-01 | |
-| REQ-07 | |
-| REQ-08 | |
-| REQ-09 | |
-| REQ-27 | |
-| CON-05 | |
-| REQ-10 | |
-| REQ-11 | |
-| REQ-12 | |
-| REQ-13 | |
-| CON-06 | |
-| REQ-14 | |
-| REQ-15 | |
-| REQ-16 | |
-| REQ-17 | |
-| REQ-18 | |
-| REQ-19 | |
-| REQ-20 | |
-| REQ-21 | |
-| CON-07 | |
-| CON-08 | |
-| REQ-22 | |
-| REQ-23 | |
-| REQ-24 | |
-| REQ-25 | |
-| NFR-02 | |
-| NFR-03 | |
-| NFR-04 | |
-| REQ-26 | |
-| CON-09 | |
+| REQ-01 | COMP-04, COMP-05, COMP-06 |
+| REQ-02 | COMP-05, COMP-06 |
+| REQ-03 | COMP-02, COMP-05 |
+| CON-01 | COMP-04 |
+| REQ-04 | COMP-15 |
+| REQ-05 | COMP-15 |
+| CON-02 | COMP-15 |
+| CON-03 | COMP-15 |
+| REQ-06 | COMP-04, COMP-07, COMP-11 |
+| CON-04 | COMP-15 |
+| NFR-01 | COMP-07 |
+| REQ-07 | COMP-12 |
+| REQ-08 | COMP-12 |
+| REQ-09 | COMP-12 |
+| REQ-27 | COMP-12 |
+| CON-05 | COMP-05 |
+| REQ-10 | COMP-05 |
+| REQ-11 | COMP-05 |
+| REQ-12 | COMP-05, COMP-11 |
+| REQ-13 | COMP-13 |
+| CON-06 | COMP-11, COMP-12, COMP-13 |
+| REQ-14 | COMP-01 |
+| REQ-15 | COMP-03, COMP-08, COMP-16 |
+| REQ-16 | COMP-08 |
+| REQ-17 | COMP-01, COMP-08, COMP-14 |
+| REQ-18 | COMP-01, COMP-14 |
+| REQ-19 | COMP-08, COMP-11, COMP-14 |
+| REQ-20 | COMP-01, COMP-08 |
+| REQ-21 | COMP-02, COMP-08 |
+| CON-07 | COMP-08 |
+| CON-08 | COMP-05, COMP-08 |
+| REQ-22 | COMP-09 |
+| REQ-23 | COMP-10 |
+| REQ-24 | COMP-10 |
+| REQ-25 | COMP-10 |
+| NFR-02 | COMP-10 |
+| NFR-03 | COMP-17 |
+| NFR-04 | COMP-17 |
+| REQ-26 | COMP-17 |
+| CON-09 | COMP-17 |
 
 ## ②コンポーネント×関数
 
+コンポーネント設計工程完了（2026-08-24）。出典: `docs/02_component_design/component_design.md`。関数列は関数設計工程で埋める。
+
 | COMP-xx | FUNC-xx |
 |---|---|
-| (コンポーネント設計完了後に追記) | |
+| COMP-01 Issue モデル拡張 | |
+| COMP-02 Run モデル拡張 | |
+| COMP-03 PromptTemplate モデル拡張 / TemplateSeeder変更 | |
+| COMP-04 appsettings.json 拡張 | |
+| COMP-05 ClaudeRunEngine 拡張 | |
+| COMP-06 MockRunGenerator（新規） | |
+| COMP-07 TargetPathValidator（新規） | |
+| COMP-08 LoopEngine（新規） | |
+| COMP-09 RetentionPruner（新規） | |
+| COMP-10 OrphanSweepService（新規） | |
+| COMP-11 Program.cs エンドポイント拡張 | |
+| COMP-12 SSE自動再接続・実行中Run検出（app.js） | |
+| COMP-13 排他制御拒否時のUX誘導（app.js） | |
+| COMP-14 自律ループ操作UI（app.js, styles.css） | |
+| COMP-15 GUI配置の改善（app.js, styles.css） | |
+| COMP-16 テンプレート既定フラグの編集UI（app.js, index.html） | |
+| COMP-17 ClaudeCodeGui.Tests（新規プロジェクト） | |
 
 ## ③関数×テスト
 
