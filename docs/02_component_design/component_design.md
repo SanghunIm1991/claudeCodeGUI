@@ -180,13 +180,21 @@ public async Task<RunStartResult> StartAsync(
 | 出力 | `RunStartResult`。`ConflictingRunId`が非nullなら排他拒否（REQ-12）、そうでなければ通常どおり起動済みの`Run` |
 | 副作用 | `Run`の保存、`_active`への登録、バックグラウンドでのCLI起動またはモック実行、ログファイルへの追記 |
 
-**処理フロー（`StartAsync`冒頭に追加）**:
+**排他判定のアトミック性（設計時に発見、修正が必要）**: 「`_active.Values`から同一IssueIdを走査して探す」→「見つからなければ登録する」という2段階の実装はcheck-then-actであり原子的でない。ほぼ同時に2つの`StartAsync`呼び出しが来た場合、両方が「実行中Runなし」と判定してしまい、同一Issueに2つのRunが並行起動されうる。この確認と登録を単一の原子操作にするため、`ClaudeRunEngine`に`IssueId`→`RunId`を保持する専用の`ConcurrentDictionary<string, string> _activeIssueRuns`フィールドを追加し、`ConcurrentDictionary<TKey,TValue>.GetOrAdd(key, value)`（「キーが無ければ`value`を追加してそれを返し、既にあれば追加せず既存値を返す」を単一操作で行う）を排他ゲートとして使う。既存の`_active`（`RunId`→`RunContext`、SSE配信・キャンセル対象プロセスの参照に使用）とは責務が異なる別の辞書として併存させ、`_active`のキー方式（RunId単位）は変更しない。
 
-1. `_active.Values`に同一`IssueId`を持つ`RunContext`が存在するか確認する（**純粋関数化**: `RunContext`一覧と`issue.Id`を渡して該当有無を返す判定自体は既存の`FirstOrDefault`で十分単純なため、追加の抽出はしない。ただし判定条件そのものが変更されたら影響箇所が一目でわかるよう、`StartAsync`冒頭に1メソッド`FindActiveRunForIssue(string issueId)`として集約する）。
-2. 存在する場合、CLIを起動せず`Run`を`Status="failed"`, `IsError=true`, `ResultSummary`に競合RunId入りの文言で作成・保存し、`RunStartResult(rejectedRun, conflicting.RunId)`を返す（REQ-12）。
-3. 存在しない場合は既存どおり対象ディレクトリ存在チェック → `MockRunGenerator.ShouldUseMock(...)`（COMP-06）でモック判定 → `Run.IsMock`・`Run.TriggeredByLoop`を設定して保存 → `RetentionPruner.PruneAsync(...)`（COMP-09）を呼び出し古いRunを削除 → `RunContext`登録 → `ExecuteAsync`をバックグラウンド起動。
+```csharp
+private readonly ConcurrentDictionary<string, string> _activeIssueRuns = new(); // IssueId -> RunId
+```
 
-**`RunContext`の拡張**: `RunId`・`IssueId`を保持するフィールドを追加する（排他判定・キャンセル時のIssue特定に使用）。
+**処理フロー（`StartAsync`冒頭、`Run`インスタンス生成直後に追加）**:
+
+1. `var winningRunId = _activeIssueRuns.GetOrAdd(issue.Id, run.Id);` を呼ぶ。`run`（新規`Run`インスタンス、`Id`は`Guid`で既に採番済み・まだ未保存）を先に生成しておく必要がある。
+2. `winningRunId != run.Id`（＝既に別のRunIdが登録済みだった＝排他ロックを獲得できなかった）場合、CLIを起動せず`Run`を`Status="failed"`, `IsError=true`, `ResultSummary`に競合RunId（`winningRunId`）入りの文言で作成・保存し、`RunStartResult(rejectedRun, winningRunId)`を返す（REQ-12）。`_activeIssueRuns`へは何も書き込まない（既存エントリをそのまま保持）。
+3. `winningRunId == run.Id`（＝このRunが排他ロックを獲得した）場合は既存どおり対象ディレクトリ存在チェック → `MockRunGenerator.ShouldUseMock(...)`（COMP-06）でモック判定 → `Run.IsMock`・`Run.TriggeredByLoop`を設定して保存 → `RetentionPruner.PruneAsync(...)`（COMP-09）を呼び出し古いRunを削除 → `_active`（RunId単位、既存の辞書）へ`RunContext`登録 → `ExecuteAsync`をバックグラウンド起動。
+   - **ロック解放漏れの注意**: 対象ディレクトリが存在せず即`failed`で早期リターンする既存分岐（`ExecuteAsync`を一度も起動しない）では、手順1で既に`_activeIssueRuns`のロックを獲得済みであるにもかかわらず、通常は解放役を担う`ExecuteAsync`の`finally`（手順4）に到達しない。このパスでは早期リターンの直前に`_activeIssueRuns.TryRemove(issue.Id, out _);`を呼び、その場でロックを解放すること。これを忘れると、対象ディレクトリが存在しないIssueは以後永久に排他ロックされたままになる。
+4. `ExecuteAsync`の`finally`（`_active.TryRemove(run.Id, out _)`と同じ箇所）で`_activeIssueRuns.TryRemove(issue.Id, out _);`を呼び、Issue単位のロックを解放する。
+
+**`RunContext`の拡張**: 排他判定は`_activeIssueRuns`側で完結するため、`RunContext`自体に`IssueId`・`RunId`フィールドを追加する必要はない（当初案から変更）。`RunContext`への追加は後述のキャンセル競合修正の`IsCanceled`フラグのみとする。
 
 **`ExecuteAsync`の分岐**: `isMock`引数を追加し、モック時は既存の`ProcessStartInfo`〜`Process.Start`の代わりに`MockRunGenerator.GenerateLines(template.Stage)`（COMP-06）の各行を`ctx.Append`し、`ExitCode=0`として`ApplyResult`へ渡す。**SSE配信・`RunContext.Append`・`ApplyResult`・保存・`_active`からの除去は本番実行と完全に共通のコードパスを通る**（REQ-02の「共通経路」要件を満たす設計）。対象プロジェクトへのファイル書き込みはモック分岐内で一切発生しない。
 
@@ -198,7 +206,7 @@ public event Func<Run, Task>? RunCompleted;
 
 `ExecuteAsync`の`finally`（保存・`_active`除去の直後）で`RunCompleted?.Invoke(run)`を呼ぶ。`LoopEngine`（COMP-08）がこれを購読し、次工程の自動起動を判断する。`ClaudeRunEngine`自身はループの中身（次工程は何か等）を一切知らない疎結合設計とする。
 
-**既存バグの修正（設計時に発見、REQ-19/CON-06の前提となるため本コンポーネントで修正）**: 現行実装は`CancelAsync`が`_runStore.GetAsync(runId)`で**別インスタンス**の`Run`を取得して`Status="canceled"`を保存する一方、`ExecuteAsync`は起動時に受け取った**元の`Run`インスタンス**を使い続け、プロセスKillで異常終了したプロセスの終了コードに基づき`ApplyResult`が`Status="failed"`と判定してそれを`finally`で上書き保存してしまう。この結果、中止したはずのRunの最終状態が`canceled`ではなく`failed`になる競合がある。**修正方針**: `RunContext`に`IsCanceled`フラグを持たせ、`CancelAsync`がプロセスKillと同時にこのフラグを立てる。`ExecuteAsync`の`finally`は`ctx.IsCanceled`が真の場合`ApplyResult`を呼ばず`run.Status`を上書きしない（`CancelAsync`側が保存した`"canceled"`を正とする）。
+**既存バグの修正（設計時に発見、REQ-19/CON-06の前提となるため本コンポーネントで修正）**: 現行実装は`CancelAsync`が`_runStore.GetAsync(runId)`で**別インスタンス**の`Run`を取得して`Status="canceled"`を保存する一方、`ExecuteAsync`は起動時に受け取った**元の`Run`インスタンス**を使い続け、プロセスKillで異常終了したプロセスの終了コードに基づき`ApplyResult`が`Status="failed"`と判定してそれを`finally`で上書き保存してしまう。この結果、中止したはずのRunの最終状態が`canceled`ではなく`failed`になる競合がある。**修正方針**: `RunContext`に`IsCanceled`フラグを持たせ、`CancelAsync`がプロセスKillと同時にこのフラグを立てる。`ExecuteAsync`の`finally`は`ctx.IsCanceled`が真の場合、`ApplyResult`を呼ばないことに加えて、`run.Status`を明示的に`"canceled"`へ設定してから（既存どおり）`_runStore.SaveAsync(run)`を呼ぶ。**`ApplyResult`呼び出しをスキップするだけでは不十分な点に注意**: `finally`内の`run.FinishedAt = DateTimeOffset.UtcNow; await _runStore.SaveAsync(run);`は`ApplyResult`呼び出しの成否に関わらず無条件に実行されるため、`ApplyResult`をスキップしただけでは`run.Status`が初期値`"running"`のまま保存され、`CancelAsync`が先に保存した`"canceled"`を上書きしてしまう。`finally`内の`SaveAsync`自体をスキップする案ではなく、保存直前に`run.Status`を`"canceled"`へ揃えてから保存する案を採る。これにより、`CancelAsync`側の保存と`ExecuteAsync`側の保存のどちらが後に完了しても、最終的な永続化結果は`"canceled"`で一致する（保存順序に依存しない）。
 
 対応ID: REQ-01, REQ-02, REQ-03, REQ-10, REQ-11, REQ-12, CON-05, CON-08
 
@@ -303,11 +311,25 @@ public class LoopEngine
 1. `completedRun.TriggeredByLoop == false` または `issue.LoopEnabled == false` → `Ignore`（手動実行はトリガーにしない＝REQ-21。既にループが止まっている場合も無視）
 2. `completedRun.Status != "succeeded"` → `StopFailed`（REQ-17）
 3. `GetNextStage(issue.CurrentStage)`が`null`（最終工程`deployment`が成功） → `Complete`（REQ-16、呼び出し側で`Issue.Status="done"`, `LoopEnabled=false`に設定）
-4. `issue.LoopConsecutiveRunCount >= maxConsecutiveRuns` → `StopLimitReached`（REQ-20）
+4. `issue.LoopConsecutiveRunCount > maxConsecutiveRuns` → `StopLimitReached`（REQ-20。比較演算子は`>`であって`>=`ではない点に注意。理由は次項「連続実行回数の数え方」のオフバイワン修正を参照）
 5. 次工程の既定テンプレートが存在しない → `StopNoDefaultTemplate`（REQ-15が未設定の場合の安全な停止。要件には明記のない境界ケースだが、無限に失敗し続けるより安全に止める設計とした）
 6. 上記いずれでもなければ → `Advance`（`Issue.CurrentStage`を次工程に更新し、`LoopConsecutiveRunCount`をインクリメントしてから次Runを起動）
 
-**連続実行回数の数え方（REQ-20の解釈）**: 「4回」は自律ループが**起動したRunの数**（`TriggeredByLoop=true`のRun数）の上限とする。`StartLoopAsync`が最初のRunを起動する時点で`LoopConsecutiveRunCount=1`とし、`Advance`判定のたびにインクリメントする。5工程（要件定義→設計→実装→テスト→デプロイ）を`CurrentStage=requirements`から失敗なく完走する場合、起動されるRunは5件・工程間遷移は4回であり、上限4は「遷移4回」に一致する（`architecture-overview.md` 4.6節#7の理由付けと整合）。既存Issueを`design`以降のStageで作成しループを開始した場合は当然5件未満で完走しうるため、上限に達することはない。上限が実際に効くのは、テンプレートの不備等により想定外に長く回り続けることを防ぐ安全弁としての場面である。
+**連続実行回数の数え方（REQ-20の解釈）**: 「4回」は自律ループが**起動したRunの数**（`TriggeredByLoop=true`のRun数）の上限とする。`StartLoopAsync`が最初のRunを起動する時点で`LoopConsecutiveRunCount=1`とし、`Advance`判定のたびにインクリメントする。
+
+**設計時に発見したオフバイワン（修正済み）**: 判定④の比較を`issue.LoopConsecutiveRunCount >= maxConsecutiveRuns`（`>=`）としていた初期案では、既定Issueが`requirements`から失敗なく5工程を完走しようとするケースで、`testing`工程完了時点（`LoopConsecutiveRunCount=4`）に③（`deployment`はまだ次工程が存在するため`Complete`にならず通過）の直後で④が真になって`StopLimitReached`が発火し、5件目（`deployment`）のRunが一度も起動されないバグがあった。`architecture-overview.md` 4.6節#7が意図する「上限4回＝5工程を最後まで自動で通すのに必要な最小回数（工程間の遷移4回）」を実現するため、④の比較演算子を`>`（超過）に修正した。`issue.LoopConsecutiveRunCount`自体の初期値（`StartLoopAsync`時点で1）・インクリメントタイミング（`Advance`のたび）は変更していない。
+
+**トレース（既定設定・上限4、Issueを`CurrentStage=requirements`から開始し失敗なく完走するケース）**:
+
+| Run完了時のStage | 完了時の`LoopConsecutiveRunCount` | ④の判定（`> 4`） | 結果 |
+|---|---|---|---|
+| requirements | 1 | 1 > 4 は偽 | ③次工程`design`あり→非該当、④通過→⑥Advance。`CurrentStage=design`, count→2、Run2起動 |
+| design | 2 | 2 > 4 は偽 | ③次工程`implementation`あり→非該当、④通過→⑥Advance。`CurrentStage=implementation`, count→3、Run3起動 |
+| implementation | 3 | 3 > 4 は偽 | ③次工程`testing`あり→非該当、④通過→⑥Advance。`CurrentStage=testing`, count→4、Run4起動 |
+| testing | 4 | 4 > 4 は偽 | ③次工程`deployment`あり→非該当、④通過→⑥Advance。`CurrentStage=deployment`, count→5、Run5起動 |
+| deployment | 5 | （③で確定するため④は評価されない） | ③`GetNextStage(deployment)=null`→`Complete`。`Issue.Status=done`, `LoopEnabled=false` |
+
+`deployment`完了時点では`LoopConsecutiveRunCount=5`（上限4を上回っている）が、判定順序上③（`Complete`）が④（`StopLimitReached`）より先に評価されるため上限には抵触しない。上限が実際に`StopLimitReached`として効くのは、最大`maxConsecutiveRuns`回のAdvanceを終えてもなお次工程が存在する場合（テンプレート構成の不備・将来の工程追加等、既定の5工程パイプラインでは通常発生しない想定外のケース）に限られる、という安全弁としての位置づけである。既存Issueを`design`以降のStageで作成しループを開始した場合は当然5件未満で完走しうるため、なおさら上限に達することはない。
 
 **依存関係**: `JsonFileStore<Issue>`, `JsonFileStore<PromptTemplate>`, `ClaudeRunEngine`（`StartAsync`呼び出しと`RunCompleted`購読の両方）。
 
@@ -482,7 +504,7 @@ function connectRunStream(issueId, runId) {
 src/ClaudeCodeGui.Tests/
   ClaudeCodeGui.Tests.csproj      xUnit, src/ClaudeCodeGui への ProjectReference
   Unit/
-    ClaudeRunEngineTests.cs       BuildPrompt、既存排他判定の対象（内部ロジックはpublic静的関数へ切り出し済み前提）
+    ClaudeRunEngineTests.cs       BuildPrompt、同時実行排他（`_activeIssueRuns`によるアトミックな排他）の対象。排他判定自体は`ConcurrentDictionary.GetOrAdd`のアトミック性に委ねる設計であり静的な純粋関数へは切り出さないため、`ClaudeRunEngine`インスタンスに対し2つの`StartAsync`をほぼ同時に呼び出し、一方が成功・他方が`ConflictingRunId`付きで拒否されることを検証する準結合テストとして書く
     MockRunGeneratorTests.cs      ShouldUseMock, GenerateLines
     TargetPathValidatorTests.cs   IsWithinAllowedRoots
     LoopEngineTests.cs            Evaluate, GetNextStage, ResolveDefaultTemplate
@@ -525,7 +547,7 @@ sequenceDiagram
         Loop ->> IssueStore: SaveAsync(issue with LoopEnabled=false, LoopStopReason="failed")
     else 次工程が存在しない (deployment成功)
         Loop ->> IssueStore: SaveAsync(issue with Status="done", LoopEnabled=false)
-    else LoopConsecutiveRunCount >= 4
+    else LoopConsecutiveRunCount > 4
         Loop ->> IssueStore: SaveAsync(issue with LoopEnabled=false, LoopStopReason="limit_reached")
     else 既定テンプレートなし
         Loop ->> IssueStore: SaveAsync(issue with LoopEnabled=false, LoopStopReason="no_default_template")
