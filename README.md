@@ -53,7 +53,7 @@ Claude Codeとバイブコーディングによる「ウォーターフォール
 
 ## 次のステップ
 
-本番実装前の要件レビューを実施し、以下の論点はすべて要件確定済み（実装は未着手）。詳細は`docs/architecture-overview.md`の「4. 主な設計判断」内の各節を参照。
+本番実装前の要件レビューを実施し、以下の論点はすべて要件確定済み。詳細は`docs/architecture-overview.md`の「4. 主な設計判断」内の各節を参照。
 
 - モック実行モード（4.1）
 - パーミッションモード運用方針・`TargetProjectPath`の範囲制限（4.3）
@@ -64,3 +64,5 @@ Claude Codeとバイブコーディングによる「ウォーターフォール
 - Run/ログの保持方針（4.7）
 - Issue削除時に孤児化するRun/ログの扱い（4.8）
 - 自動テスト方針（4.9）
+
+2026-08-24より、上記9件の実装をClaude Codeの`waterfall-dev-workflow`スキル（自律ループモード）で進めている。要件定義書（`docs/01_requirements/requirements.md`）・コンポーネント設計書（`docs/02_component_design/component_design.md`、作業中）等の正式な成果物、進捗・運用ルールは`CLAUDE.md`および`docs/handoff.md`を参照。
