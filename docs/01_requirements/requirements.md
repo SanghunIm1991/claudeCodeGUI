@@ -74,7 +74,7 @@
 | ID | 分類 | 内容 |
 |---|---|---|
 | REQ-10 | 機能要件 | 同一Issueに対しては同時に1つのRunのみ許可する。キュー化はせず、実行中に新規Run開始を試みた場合は拒否する |
-| REQ-11 | 機能要件 | `RunContext` に `IssueId` を追加し、`StartAsync` 開始時に `_active.Values` から同一IssueIdの実行中Runがないか確認する方式で判定する |
+| REQ-11 | 機能要件 | `RunContext` に `IssueId` を追加し、`StartAsync` 開始時に `_active.Values` から同一IssueIdの実行中Runがないか確認する方式で判定する ※判定方法の具体的な実装（アトミック性の確保方式）はコンポーネント設計工程で確定する（`docs/02_component_design/component_design.md` COMP-05参照） |
 | REQ-12 | 機能要件 | 拒否時は `Run.Status = "failed"` とし、既存の実行中RunIdをレスポンスに含める（既存の実行中Runには影響しない） |
 | REQ-13 | 機能要件 | 新規実行が拒否された際、フロント側は返された既存RunIdを使って「このIssueは実行中です。中止しますか？」等の形でその場から中止操作に誘導する |
 | CON-06 | 制約 | 実行中Runの停止手段は既存の `CancelAsync`/`POST /api/runs/{id}/cancel` をそのまま使う。REQ-13のUXおよびページ再読込後の中止操作誘導は、2.4節（SSE自動再接続）で実装する「Issueの実行中Runを検出する」仕組みを再利用する設計とする |
