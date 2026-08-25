@@ -55,7 +55,7 @@
 
 | COMP-xx | FUNC-xx |
 |---|---|
-| COMP-01 Issue モデル拡張 | |
+| COMP-01 Issue モデル拡張 | (関数なし。プロパティの読み書きはCOMP-08/COMP-11/COMP-14の関数設計側で規定) |
 | COMP-02 Run モデル拡張 | |
 | COMP-03 PromptTemplate モデル拡張 / TemplateSeeder変更 | |
 | COMP-04 appsettings.json 拡張 | |
