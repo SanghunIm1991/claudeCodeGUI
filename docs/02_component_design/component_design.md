@@ -112,7 +112,9 @@ flowchart TB
 
 **設計判断**: 手動停止（中止ボタン経由、REQ-19）では`LoopStopReason`は変更しない（＝`null`のまま）。「要確認」表示（REQ-17・REQ-20）は`LoopStopReason != null`の場合のみ行う設計とし、ユーザー自身が止めた場合と区別する。
 
-**この方針を崩す競合状態と対策（レビューラウンド3で発見、修正済み）**: 手動中止（`POST /api/runs/{id}/cancel`、COMP-11）は`ClaudeRunEngine.CancelAsync`によるプロセスKillと`LoopEngine.StopLoopAsync`による`LoopEnabled=false`書き込みを同期的に行うが、キャンセルされたRunの完了通知（`RunCompleted`イベント→`LoopEngine.HandleRunCompletedAsync`）はこれとは別の非同期経路で、いつ完了するか保証がない。`HandleRunCompletedAsync`が`StopLoopAsync`より先にIssueを読むと、`issue.LoopEnabled`がまだ`true`のままのため、`completedRun.Status`（Killされた結果`"canceled"`）が`Evaluate`の失敗判定に誤って合流し`LoopStopReason="failed"`が保存されうる。この競合と対策（`Evaluate`の判定順序に`completedRun.Status == "canceled"`を独立した分岐として追加し、到達順序に依存せず`Ignore`となるようにする設計、および`LoopEngine`が持つIssue単位ロックによる排他制御）はCOMP-08で確定する。
+**この方針を崩す競合状態と対策（レビューラウンド3で発見、修正済み）**: 手動中止（`POST /api/runs/{id}/cancel`、COMP-11）は`ClaudeRunEngine.CancelAsync`によるプロセスKillと`LoopEngine.StopLoopAsync`による`LoopEnabled=false`書き込みを同期的に行うが、キャンセルされたRunの完了通知（`RunCompleted`イベント→`LoopEngine.HandleRunCompletedAsync`）はこれとは別の非同期経路で、いつ完了するか保証がない。
+
+`HandleRunCompletedAsync`が`StopLoopAsync`より先にIssueを読むと、`issue.LoopEnabled`がまだ`true`のままのため、`completedRun.Status`（Killされた結果`"canceled"`）が`Evaluate`の失敗判定に誤って合流し`LoopStopReason="failed"`が保存されうる。この競合と対策（`Evaluate`の判定順序に`completedRun.Status == "canceled"`を独立した分岐として追加し、到達順序に依存せず`Ignore`となるようにする設計、および`LoopEngine`が持つIssue単位ロックによる排他制御）はCOMP-08で確定する。
 
 対応ID: REQ-14, REQ-17, REQ-18, REQ-20
 
@@ -152,7 +154,17 @@ public static class PromptTemplateDefaultResolver
 }
 ```
 
-COMP-11のテンプレートPOST/PUTハンドラ（副作用担当）は、①リクエストDTOから`candidate`を構築、②`JsonFileStore<PromptTemplate>.GetAllAsync()`で全件取得、③`ResolveDemotions(allTemplates, candidate)`を呼ぶ、④返ってきた降格対象それぞれの`IsDefaultForStage`を`false`にして保存、⑤`candidate`自身を保存、という手順を踏むだけであり、「同一Stageで既定は1つまで」という判定そのもの（ロジック）は一切持たない。これにより2.節のコンポーネント一覧表のCOMP-03対象ファイルに`Services/PromptTemplateDefaultResolver.cs`が追加される（`Models/PromptTemplate.cs`, `Data/TemplateSeeder.cs`と併せて3ファイル）。
+COMP-11のテンプレートPOST/PUTハンドラ（副作用担当）は、次の手順を踏むだけであり、「同一Stageで既定は1つまで」という判定そのもの（ロジック）は一切持たない。
+
+```mermaid
+flowchart LR
+    A["①リクエストDTOから\ncandidateを構築"] --> B["②JsonFileStore&lt;PromptTemplate&gt;\n.GetAllAsync()で全件取得"]
+    B --> C["③ResolveDemotions\n(allTemplates, candidate)を呼ぶ"]
+    C --> D["④返ってきた降格対象それぞれの\nIsDefaultForStageをfalseにして保存"]
+    D --> E["⑤candidate自身を保存"]
+```
+
+これにより2.節のコンポーネント一覧表のCOMP-03対象ファイルに`Services/PromptTemplateDefaultResolver.cs`が追加される（`Models/PromptTemplate.cs`, `Data/TemplateSeeder.cs`と併せて3ファイル）。
 
 **`TemplateSeeder`の変更**: 初回起動時に投入する5件の既定テンプレートは、それぞれ`IsDefaultForStage = true`で作成する。既定テンプレートが1つも設定されていない状態だと自律ループ（COMP-08）が起動できないため、seed直後から動作する状態にする。
 
@@ -201,7 +213,13 @@ public async Task<RunStartResult> StartAsync(
 | 出力 | `RunStartResult`。`ConflictingRunId`が非nullなら排他拒否（REQ-12）、そうでなければ通常どおり起動済みの`Run` |
 | 副作用 | `Run`の保存、`_active`への登録、バックグラウンドでのCLI起動またはモック実行、ログファイルへの追記 |
 
-**排他判定のアトミック性（設計時に発見、修正が必要。requirements.md REQ-11からの変更点）**: requirements.md REQ-11本文は「`_active.Values`から同一IssueIdの実行中Runがないか確認する方式」（check-then-act）を記載しており、REQ-11には「判定方法の具体的な実装（アトミック性の確保方式）はコンポーネント設計工程で確定する」旨の注記がある。本節はその確定内容であり、以下の理由によりREQ-11本文の方式そのままでは採用しない。「`_active.Values`から同一IssueIdを走査して探す」→「見つからなければ登録する」という2段階の実装はcheck-then-actであり原子的でない。ほぼ同時に2つの`StartAsync`呼び出しが来た場合、両方が「実行中Runなし」と判定してしまい、同一Issueに2つのRunが並行起動されうる。この確認と登録を単一の原子操作にするため、`ClaudeRunEngine`に`IssueId`→`RunId`を保持する専用の`ConcurrentDictionary<string, string> _activeIssueRuns`フィールドを追加し、`ConcurrentDictionary<TKey,TValue>.GetOrAdd(key, value)`（「キーが無ければ`value`を追加してそれを返し、既にあれば追加せず既存値を返す」を単一操作で行う）を排他ゲートとして使う。既存の`_active`（`RunId`→`RunContext`、SSE配信・キャンセル対象プロセスの参照に使用）とは責務が異なる別の辞書として併存させ、`_active`のキー方式（RunId単位）は変更しない。
+**排他判定のアトミック性（設計時に発見、修正が必要。requirements.md REQ-11からの変更点）**
+
+requirements.md REQ-11本文は「`_active.Values`から同一IssueIdの実行中Runがないか確認する方式」（check-then-act）を記載しており、REQ-11には「判定方法の具体的な実装（アトミック性の確保方式）はコンポーネント設計工程で確定する」旨の注記がある。本節はその確定内容であり、以下の理由によりREQ-11本文の方式そのままでは採用しない。
+
+「`_active.Values`から同一IssueIdを走査して探す」→「見つからなければ登録する」という2段階の実装はcheck-then-actであり原子的でない。ほぼ同時に2つの`StartAsync`呼び出しが来た場合、両方が「実行中Runなし」と判定してしまい、同一Issueに2つのRunが並行起動されうる。
+
+この確認と登録を単一の原子操作にするため、`ClaudeRunEngine`に`IssueId`→`RunId`を保持する専用の`ConcurrentDictionary<string, string> _activeIssueRuns`フィールドを追加し、`ConcurrentDictionary<TKey,TValue>.GetOrAdd(key, value)`（「キーが無ければ`value`を追加してそれを返し、既にあれば追加せず既存値を返す」を単一操作で行う）を排他ゲートとして使う。既存の`_active`（`RunId`→`RunContext`、SSE配信・キャンセル対象プロセスの参照に使用）とは責務が異なる別の辞書として併存させ、`_active`のキー方式（RunId単位）は変更しない。
 
 ```csharp
 private readonly ConcurrentDictionary<string, string> _activeIssueRuns = new(); // IssueId -> RunId
@@ -211,9 +229,35 @@ private readonly ConcurrentDictionary<string, string> _activeIssueRuns = new(); 
 
 1. `var winningRunId = _activeIssueRuns.GetOrAdd(issue.Id, run.Id);` を呼ぶ。`run`（新規`Run`インスタンス、`Id`は`Guid`で既に採番済み・まだ未保存）を先に生成しておく必要がある。
 2. `winningRunId != run.Id`（＝既に別のRunIdが登録済みだった＝排他ロックを獲得できなかった）場合、CLIを起動せず`Run`を`Status="failed"`, `IsError=true`, `ResultSummary`に競合RunId（`winningRunId`）入りの文言で作成・保存し、`RunStartResult(rejectedRun, winningRunId)`を返す（REQ-12）。`_activeIssueRuns`へは何も書き込まない（既存エントリをそのまま保持）。
-3. `winningRunId == run.Id`（＝このRunが排他ロックを獲得した）場合、対象ディレクトリ存在チェック → `MockRunGenerator.ShouldUseMock(...)`（COMP-06）でモック判定 → `Run.IsMock`・`Run.TriggeredByLoop`を設定して保存 → `RetentionPruner.PruneAsync(...)`（COMP-09）を呼び出し古いRunを削除 → `_active`（RunId単位、既存の辞書）へ`RunContext`登録 → `ExecuteAsync`をバックグラウンド起動（`Task.Run(...)`呼び出し）、という一連の処理を単一の`try`ブロックで囲み、ローカル変数`bool backgroundStarted = false;`を用意する。`Task.Run(...)`の呼び出しに成功した直後（＝バックグラウンド実行の開始が確定した直後）にのみ`backgroundStarted = true;`を設定する。この`try`に対応する`finally`で`if (!backgroundStarted) { _activeIssueRuns.TryRemove(issue.Id, out _); }`を実行する。
-   - **ロック解放の設計方針（区間全体を一律にカバー）**: 「対象ディレクトリ不在」のような個別の早期リターンパターンをその都度列挙して解放処理を書き足す設計ではなく、手順1で`_activeIssueRuns`のロックを獲得してから`Task.Run`呼び出しが完了するまでの区間全体を「`try/finally`＋成功フラグ（`backgroundStarted`）」で一律にカバーする設計とする。この区間の終了経路は次の2種類に大別できるが、いずれも`backgroundStarted`が`false`のまま`finally`に到達するため、`_activeIssueRuns.TryRemove`による解放が自動的に行われる（個別分岐ごとの解放コードは不要）: (a) 対象ディレクトリ不在のような**正常系の早期return**（`RunStartResult`を構築して返す）、(b) `SaveAsync`のI/O例外・`RetentionPruner.PruneAsync`内の例外等、この区間で発生しうる**予期しない例外**（`catch`は設けず、`finally`でのロック解放後にそのまま呼び出し元へ再送出する。ASP.NET Core側で500応答等に変換され、結果として「failed応答を返す」REQ-12の枠組みには乗らないが、ロックの解放自体は保証される）。今後この区間に新しい早期リターン分岐が追加された場合も、`backgroundStarted`を立てる前にreturnする限り自動的に解放対象となるため、実装者が個別に解放処理を書き足す必要がない。
+3. `winningRunId == run.Id`（＝このRunが排他ロックを獲得した）場合、対象ディレクトリ存在チェック → `MockRunGenerator.ShouldUseMock(...)`（COMP-06）でモック判定 → `Run.IsMock`・`Run.TriggeredByLoop`を設定して保存 → `RetentionPruner.PruneAsync(...)`（COMP-09）を呼び出し古いRunを削除 → `_active`（RunId単位、既存の辞書）へ`RunContext`登録 → `ExecuteAsync`をバックグラウンド起動（`Task.Run(...)`呼び出し）、という一連の処理を単一の`try`ブロックで囲み、ローカル変数`bool backgroundStarted = false;`を用意する。`Task.Run(...)`の呼び出しに成功した直後（＝バックグラウンド実行の開始が確定した直後）にのみ`backgroundStarted = true;`を設定する。この`try`に対応する`finally`で`if (!backgroundStarted) { _activeIssueRuns.TryRemove(issue.Id, out _); }`を実行する（ロック解放の設計方針は本リスト直後を参照）。
 4. `ExecuteAsync`の`finally`（`_active.TryRemove(run.Id, out _)`と同じ箇所）で`_activeIssueRuns.TryRemove(issue.Id, out _);`を呼び、Issue単位のロックを解放する（手順3で`backgroundStarted = true`となった通常経路では、こちらの`ExecuteAsync`側`finally`がロック解放の実担当となる。手順3の`finally`はこの経路では何もしない）。
+
+上記1〜4の流れを図示すると以下のとおり（`_activeIssueRuns`によるIssue単位ロックの獲得から解放までを中心に、判定・処理の分岐を示す）。
+
+```mermaid
+flowchart TD
+    A["新規Runインスタンスを生成\n(Idは採番済み・まだ未保存)"] --> B["_activeIssueRuns.GetOrAdd(issue.Id, run.Id)"]
+    B --> C{"winningRunId == run.Id ?"}
+    C -->|"No（ロック獲得できず）"| D["Run.Status=failed, IsError=true\nResultSummaryに競合RunId(winningRunId)を記載して保存"]
+    D --> E["RunStartResult(rejectedRun, winningRunId)を返す\n（_activeIssueRunsは書き換えない）"]
+    C -->|"Yes（ロック獲得）"| F["try開始（backgroundStarted = false）"]
+    F --> G["対象ディレクトリ存在チェック"]
+    G --> H["MockRunGenerator.ShouldUseMockでモック判定 (COMP-06)"]
+    H --> I["Run.IsMock / TriggeredByLoopを設定して保存"]
+    I --> J["RetentionPruner.PruneAsyncで古いRunを削除 (COMP-09)"]
+    J --> K["_active（RunId単位、既存の辞書）へRunContext登録"]
+    K --> L["Task.Run(ExecuteAsync)を呼び出す"]
+    L --> M["backgroundStarted = true"]
+    M --> N["（バックグラウンド完了後）ExecuteAsyncのfinallyで\n_activeIssueRuns.TryRemove（ロックの実解放）"]
+    F -.->|"try区間内での早期return または例外\n(backgroundStartedはfalseのまま)"| O["finallyで backgroundStarted==false を確認し\n_activeIssueRuns.TryRemoveでロック解放"]
+```
+
+**ロック解放の設計方針（区間全体を一律にカバー）**: 「対象ディレクトリ不在」のような個別の早期リターンパターンをその都度列挙して解放処理を書き足す設計ではなく、手順1で`_activeIssueRuns`のロックを獲得してから`Task.Run`呼び出しが完了するまでの区間全体を「`try/finally`＋成功フラグ（`backgroundStarted`）」で一律にカバーする設計とする。この区間の終了経路は次の2種類に大別できるが、いずれも`backgroundStarted`が`false`のまま`finally`に到達するため、`_activeIssueRuns.TryRemove`による解放が自動的に行われる（個別分岐ごとの解放コードは不要）。
+
+- (a) 対象ディレクトリ不在のような**正常系の早期return**（`RunStartResult`を構築して返す）
+- (b) `SaveAsync`のI/O例外・`RetentionPruner.PruneAsync`内の例外等、この区間で発生しうる**予期しない例外**（`catch`は設けず、`finally`でのロック解放後にそのまま呼び出し元へ再送出する。ASP.NET Core側で500応答等に変換され、結果として「failed応答を返す」REQ-12の枠組みには乗らないが、ロックの解放自体は保証される）
+
+今後この区間に新しい早期リターン分岐が追加された場合も、`backgroundStarted`を立てる前にreturnする限り自動的に解放対象となるため、実装者が個別に解放処理を書き足す必要がない。
 
 **`RunContext`の拡張**: 排他判定は`_activeIssueRuns`側で完結するため、`RunContext`自体に`IssueId`・`RunId`フィールドを追加する必要はない（当初案から変更）。`RunContext`への追加は後述のキャンセル競合修正の`IsCanceled`フラグのみとする。
 
@@ -227,9 +271,33 @@ public event Func<Run, Task>? RunCompleted;
 
 `ExecuteAsync`の`finally`（保存・`_active`除去の直後）で`RunCompleted?.Invoke(run)`を呼ぶ。`LoopEngine`（COMP-08）がこれを購読し、次工程の自動起動を判断する。`ClaudeRunEngine`自身はループの中身（次工程は何か等）を一切知らない疎結合設計とする。
 
-**既存バグの修正（設計時に発見、REQ-19/CON-06の前提となるため本コンポーネントで修正）**: 現行実装は`CancelAsync`が`_runStore.GetAsync(runId)`で**別インスタンス**の`Run`を取得して`Status="canceled"`を保存する一方、`ExecuteAsync`は起動時に受け取った**元の`Run`インスタンス**を使い続け、プロセスKillで異常終了したプロセスの終了コードに基づき`ApplyResult`が`Status="failed"`と判定してそれを`finally`で上書き保存してしまう。この結果、中止したはずのRunの最終状態が`canceled`ではなく`failed`になる競合がある。**修正方針**: `RunContext`に`IsCanceled`フラグを持たせ、`CancelAsync`がプロセスKillと同時にこのフラグを立てる。`ExecuteAsync`の`finally`は`ctx.IsCanceled`が真の場合、`ApplyResult`を呼ばないことに加えて、`run.Status`を明示的に`"canceled"`へ設定してから（既存どおり）`_runStore.SaveAsync(run)`を呼ぶ。**`ApplyResult`呼び出しをスキップするだけでは不十分な点に注意**: `finally`内の`run.FinishedAt = DateTimeOffset.UtcNow; await _runStore.SaveAsync(run);`は`ApplyResult`呼び出しの成否に関わらず無条件に実行されるため、`ApplyResult`をスキップしただけでは`run.Status`が初期値`"running"`のまま保存され、`CancelAsync`が先に保存した`"canceled"`を上書きしてしまう。`finally`内の`SaveAsync`自体をスキップする案ではなく、保存直前に`run.Status`を`"canceled"`へ揃えてから保存する案を採る。これにより、`CancelAsync`側の保存と`ExecuteAsync`側の保存のどちらが後に完了しても、最終的な永続化結果は`"canceled"`で一致する（保存順序に依存しない）。
+**既存バグの修正（設計時に発見、REQ-19/CON-06の前提となるため本コンポーネントで修正）**
 
-**`IsCanceled`のスレッド間可視性**: `RunContext`は既に`_lines`/`_completed`/`_signal`を保護する`private readonly object _lock = new();`を持つ（`Append`・`Complete`・ログ取得側がそれぞれ`lock (_lock) { ... }`で操作する既存実装）。新設する`IsCanceled`フラグも、この既存の`_lock`と同じ排他制御下に置く。具体的には、`CancelAsync`がフラグを立てる箇所（プロセスKillと同時に実行）を`lock (_lock) { IsCanceled = true; }`、`ExecuteAsync`の`finally`がフラグを読む箇所を`lock (_lock) { if (IsCanceled) { ... } }`のように、いずれも`lock (_lock)`越しにアクセスする。専用の`volatile`修飾子や別ロックを新設するのではなく、既存の`_lock`を再利用することで、`CancelAsync`（別スレッド／別タスクから呼ばれうる）が設定した値を`ExecuteAsync`の`finally`が確実に観測できることを保証する（.NETの`lock`はメモリバリアを伴うため、同一ロックを介したwrite→readの順序でスレッド間可視性が保証される）。
+現行実装は`CancelAsync`が`_runStore.GetAsync(runId)`で**別インスタンス**の`Run`を取得して`Status="canceled"`を保存する一方、`ExecuteAsync`は起動時に受け取った**元の`Run`インスタンス**を使い続け、プロセスKillで異常終了したプロセスの終了コードに基づき`ApplyResult`が`Status="failed"`と判定してそれを`finally`で上書き保存してしまう。この結果、中止したはずのRunの最終状態が`canceled`ではなく`failed`になる競合がある。
+
+**修正方針**: `RunContext`に`IsCanceled`フラグを持たせ、`CancelAsync`がプロセスKillと同時にこのフラグを立てる。`ExecuteAsync`の`finally`は`ctx.IsCanceled`が真の場合、`ApplyResult`を呼ばないことに加えて、`run.Status`を明示的に`"canceled"`へ設定してから（既存どおり）`_runStore.SaveAsync(run)`を呼ぶ。
+
+**`ApplyResult`呼び出しをスキップするだけでは不十分な点に注意**: `finally`内の`run.FinishedAt = DateTimeOffset.UtcNow; await _runStore.SaveAsync(run);`は`ApplyResult`呼び出しの成否に関わらず無条件に実行されるため、`ApplyResult`をスキップしただけでは`run.Status`が初期値`"running"`のまま保存され、`CancelAsync`が先に保存した`"canceled"`を上書きしてしまう。`finally`内の`SaveAsync`自体をスキップする案ではなく、保存直前に`run.Status`を`"canceled"`へ揃えてから保存する案を採る。これにより、`CancelAsync`側の保存と`ExecuteAsync`側の保存のどちらが後に完了しても、最終的な永続化結果は`"canceled"`で一致する（保存順序に依存しない）。この「順序に依存せず一致する」関係を図示すると以下のとおり。
+
+```mermaid
+sequenceDiagram
+    participant Cancel as CancelAsync
+    participant Ctx as RunContext.IsCanceled
+    participant Exec as ExecuteAsyncのfinally
+    participant Store as _runStore
+
+    Note over Cancel,Exec: どちらの順序で完了しても最終結果は一致する
+    Cancel ->> Ctx: lock(_lock) { IsCanceled = true }
+    Cancel ->> Store: SaveAsync(run with Status="canceled")（別インスタンス）
+    Exec ->> Ctx: lock(_lock) { if (IsCanceled) ... }
+    Note over Exec: IsCanceled=true のためApplyResultは呼ばない
+    Exec ->> Exec: run.Status = "canceled" を明示的に設定
+    Exec ->> Store: SaveAsync(run)（ExecuteAsyncが保持する元のインスタンス）
+```
+
+**`IsCanceled`のスレッド間可視性**: `RunContext`は既に`_lines`/`_completed`/`_signal`を保護する`private readonly object _lock = new();`を持つ（`Append`・`Complete`・ログ取得側がそれぞれ`lock (_lock) { ... }`で操作する既存実装）。新設する`IsCanceled`フラグも、この既存の`_lock`と同じ排他制御下に置く。
+
+具体的には、`CancelAsync`がフラグを立てる箇所（プロセスKillと同時に実行）を`lock (_lock) { IsCanceled = true; }`、`ExecuteAsync`の`finally`がフラグを読む箇所を`lock (_lock) { if (IsCanceled) { ... } }`のように、いずれも`lock (_lock)`越しにアクセスする。専用の`volatile`修飾子や別ロックを新設するのではなく、既存の`_lock`を再利用することで、`CancelAsync`（別スレッド／別タスクから呼ばれうる）が設定した値を`ExecuteAsync`の`finally`が確実に観測できることを保証する（.NETの`lock`はメモリバリアを伴うため、同一ロックを介したwrite→readの順序でスレッド間可視性が保証される）。
 
 **COMP-08との関係（レビューラウンド3で追記）**: 上記の修正により、`RunCompleted`イベントで`LoopEngine.HandleRunCompletedAsync`（COMP-08）に渡される`Run`は、手動中止されたRunであれば`Status`が必ず`"canceled"`になっていることが保証される（`CancelAsync`呼び出しから`RunCompleted`発火までの間に他の値へ書き換わることはない）。COMP-08はこの保証を前提に、`completedRun.Status == "canceled"`を`Evaluate`の判定に直接使うことで、手動停止時に`LoopStopReason`が誤って上書きされる競合状態（COMP-01参照）を、新規フィールドを追加せず解消している。
 
@@ -347,7 +415,19 @@ public class LoopEngine
 }
 ```
 
-**ロック解放の設計方針（`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`共通、レビュー特例ラウンド4で追記）**: COMP-05の`_activeIssueRuns`同様、「このメソッドでは○○の例外が起きうるので××で対応する」のように個別の例外パターンをその都度列挙して解放処理を書き足す設計にはしない。ただし前提はCOMP-05とは異なる。COMP-05の`StartAsync`はロックの実解放担当が「同期的な`StartAsync`本体」から「非同期のバックグラウンドタスク`ExecuteAsync`」へ引き継がれる構成であり、`backgroundStarted`という成功フラグと2箇所の`finally`（`StartAsync`側・`ExecuteAsync`側）による分担が必要だった。一方、`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`はいずれも単一のasyncメソッド内で「ロック取得→Issueの読み込み・更新・保存（`StartLoopAsync`はさらに`ClaudeRunEngine.StartAsync`呼び出し）→ロック解放」が完結し、バックグラウンドタスクへの引き継ぎは発生しない（`ClaudeRunEngine.StartAsync`の呼び出し自体は行うが、この3メソッドの排他ロックの対象範囲はあくまで「Issueの読み込み〜保存」区間であり、起動したRunの実行完了＝`ExecuteAsync`のバックグラウンド完了まで含める必要はない点はCOMP-05と同様）。
+**ロック解放の設計方針（`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`共通、レビュー特例ラウンド4で追記）**
+
+COMP-05の`_activeIssueRuns`同様、「このメソッドでは○○の例外が起きうるので××で対応する」のように個別の例外パターンをその都度列挙して解放処理を書き足す設計にはしない。ただし前提はCOMP-05とは異なる。
+
+COMP-05の`StartAsync`はロックの実解放担当が「同期的な`StartAsync`本体」から「非同期のバックグラウンドタスク`ExecuteAsync`」へ引き継がれる構成であり、`backgroundStarted`という成功フラグと2箇所の`finally`（`StartAsync`側・`ExecuteAsync`側）による分担が必要だった。一方、`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`はいずれも単一のasyncメソッド内で「ロック取得→Issueの読み込み・更新・保存（`StartLoopAsync`はさらに`ClaudeRunEngine.StartAsync`呼び出し）→ロック解放」が完結し、バックグラウンドタスクへの引き継ぎは発生しない（`ClaudeRunEngine.StartAsync`の呼び出し自体は行うが、この3メソッドの排他ロックの対象範囲はあくまで「Issueの読み込み〜保存」区間であり、起動したRunの実行完了＝`ExecuteAsync`のバックグラウンド完了まで含める必要はない点はCOMP-05と同様）。
+
+両者の違いを要約すると次のとおり（詳細な根拠は本節末尾「ロック解放が保証される根拠」を参照）。
+
+| | COMP-05 `StartAsync` | COMP-08 `HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync` |
+|---|---|---|
+| ロック解放の実担当 | 同期本体と非同期バックグラウンド（`ExecuteAsync`）に分かれる | 単一のasyncメソッド内で完結する |
+| 解放を保証する構造 | 成功フラグ（`backgroundStarted`）＋2箇所の`finally` | 1段の`try/finally`のみ（成功フラグ不要） |
+| 例外時の扱い | `catch`を設けず`finally`解放後に再送出 | 同左（COMP-05の(b)経路と同様） |
 
 そのため3メソッドいずれも、次の単純な形（1段の`try/finally`のみ、成功フラグ不要）でロック解放を保証する。
 
@@ -381,9 +461,30 @@ public async Task HandleRunCompletedAsync(Run completedRun)
 6. 次工程の既定テンプレートが存在しない → `StopNoDefaultTemplate`（REQ-15が未設定の場合の安全な停止。要件には明記のない境界ケースだが、無限に失敗し続けるより安全に止める設計とした）
 7. 上記いずれでもなければ → `Advance`（`Issue.CurrentStage`を次工程に更新し、`LoopConsecutiveRunCount`をインクリメントしてから次Runを起動）
 
+上記の判定順序を図示すると以下のとおり（各分岐が上から順に評価される。この判定順序が実際のRun完了イベント処理の中でどう使われるかは4.1節のシーケンス図も参照）。
+
+```mermaid
+flowchart TD
+    Start(["Evaluate(issue, completedRun, templates)"]) --> Q1{"①TriggeredByLoop==false\nまたはLoopEnabled==false ?"}
+    Q1 -->|Yes| Ignore1["Ignore"]
+    Q1 -->|No| Q2{"②Status==\"canceled\" ?"}
+    Q2 -->|Yes| Ignore2["Ignore（手動中止由来）"]
+    Q2 -->|No| Q3{"③Status!=\"succeeded\" ?"}
+    Q3 -->|Yes| StopFailed["StopFailed"]
+    Q3 -->|No| Q4{"④次工程が存在しない\n（GetNextStageがnull）?"}
+    Q4 -->|Yes| Complete["Complete"]
+    Q4 -->|No| Q5{"⑤LoopConsecutiveRunCount\n> maxConsecutiveRuns ?"}
+    Q5 -->|Yes| StopLimit["StopLimitReached"]
+    Q5 -->|No| Q6{"⑥次工程の既定テンプレートが\n存在しない ?"}
+    Q6 -->|Yes| StopNoTmpl["StopNoDefaultTemplate"]
+    Q6 -->|No| Advance["⑦Advance"]
+```
+
 **連続実行回数の数え方（REQ-20の解釈）**: 「4回」は自律ループが**起動したRunの数**（`TriggeredByLoop=true`のRun数）の上限とする。`StartLoopAsync`が最初のRunを起動する時点で`LoopConsecutiveRunCount=1`とし、`Advance`判定のたびにインクリメントする。
 
-**設計時に発見したオフバイワン（修正済み）**: 判定⑤の比較を`issue.LoopConsecutiveRunCount >= maxConsecutiveRuns`（`>=`）としていた初期案では、既定Issueが`requirements`から失敗なく5工程を完走しようとするケースで、`testing`工程完了時点（`LoopConsecutiveRunCount=4`）に④（`deployment`はまだ次工程が存在するため`Complete`にならず通過）の直後で⑤が真になって`StopLimitReached`が発火し、5件目（`deployment`）のRunが一度も起動されないバグがあった。`architecture-overview.md` 4.6節#7が意図する「上限4回＝5工程を最後まで自動で通すのに必要な最小回数（工程間の遷移4回）」を実現するため、⑤の比較演算子を`>`（超過）に修正した。`issue.LoopConsecutiveRunCount`自体の初期値（`StartLoopAsync`時点で1）・インクリメントタイミング（`Advance`のたび）は変更していない。
+**設計時に発見したオフバイワン（修正済み）**: 判定⑤の比較を`issue.LoopConsecutiveRunCount >= maxConsecutiveRuns`（`>=`）としていた初期案では、既定Issueが`requirements`から失敗なく5工程を完走しようとするケースで、`testing`工程完了時点（`LoopConsecutiveRunCount=4`）に④（`deployment`はまだ次工程が存在するため`Complete`にならず通過）の直後で⑤が真になって`StopLimitReached`が発火し、5件目（`deployment`）のRunが一度も起動されないバグがあった。
+
+`architecture-overview.md` 4.6節#7が意図する「上限4回＝5工程を最後まで自動で通すのに必要な最小回数（工程間の遷移4回）」を実現するため、⑤の比較演算子を`>`（超過）に修正した。`issue.LoopConsecutiveRunCount`自体の初期値（`StartLoopAsync`時点で1）・インクリメントタイミング（`Advance`のたび）は変更していない。
 
 **トレース（既定設定・上限4、Issueを`CurrentStage=requirements`から開始し失敗なく完走するケース）**:
 
@@ -419,7 +520,9 @@ COMP-01が定める「手動停止では`LoopStopReason`を変更しない」と
 
 パターンBが、レビューラウンド3で指摘された「`HandleRunCompletedAsync`のIssue読み込みが`StopLoopAsync`より先に発生する」ケースに相当する。今回の`completedRun.Status == "canceled"`分岐を追加する前の判定順序（①`Ignore`判定のみで、その次が`StopFailed`判定だった構成）では、①が非該当（`LoopEnabled==true`）のためそのまま`StopFailed`に落ちていたが、新設した②の判定により到達順序に関わらず`Ignore`で確定する。ロック（(b)）はパターンA・Bいずれの経路でも`StopLoopAsync`と`HandleRunCompletedAsync`の「読み込み〜保存」区間が互いに割り込まないことを保証し、（今回の直接原因ではないが）将来の分岐追加に対する保険として働く。
 
-**`StartLoopAsync`の既定テンプレート不在時の戻り値（境界ケース、レビュー特例ラウンド4で追記）**: 開始しようとしているStage（`issue.CurrentStage`）に対し`ResolveDefaultTemplate`が`null`を返す場合（＝`IsDefaultForStage=true`のテンプレートが1件も存在しない。COMP-16でユーザーが既定フラグを外し代わりを設定していない状態等）、`StartLoopAsync`はRunを起動せず、Issueの`LoopEnabled`等も変更しないまま（更新前に判定するため書き込みは発生しない）`null`を返す。これはメソッドのシグネチャが`Task<RunStartResult?>`（戻り値型が`RunStartResult?`でnull許容）であることと整合する。
+**`StartLoopAsync`の既定テンプレート不在時の戻り値（境界ケース、レビュー特例ラウンド4で追記）**: 開始しようとしているStage（`issue.CurrentStage`）に対し`ResolveDefaultTemplate`が`null`を返す場合（＝`IsDefaultForStage=true`のテンプレートが1件も存在しない。COMP-16でユーザーが既定フラグを外し代わりを設定していない状態等）、`StartLoopAsync`はRunを起動せず、Issueの`LoopEnabled`等も変更しないまま（更新前に判定するため書き込みは発生しない）`null`を返す。
+
+これはメソッドのシグネチャが`Task<RunStartResult?>`（戻り値型が`RunStartResult?`でnull許容）であることと整合する。
 
 `Evaluate`の判定⑥`StopNoDefaultTemplate`は「ループ稼働中に次工程の既定テンプレートが見つからない」場合の停止理由（`Issue.LoopStopReason`に保存される）であるのに対し、こちらは「ループを開始しようとした時点で最初の既定テンプレートすら無い」という、ループが一度も動き出せない開始前の境界ケースであり、判定タイミングが異なる。そのため`LoopDecision`/`LoopAction`とは別の戻り値（`null`）で表現し、`LoopStopReason`（Issueへ保存される値）も更新しない。呼称の一貫性のため、この状態は`StopNoDefaultTemplate`と対になる概念として「開始時テンプレート未設定」と表記する。
 
@@ -512,7 +615,9 @@ public class OrphanSweepService
 
 既存の`GET /api/issues/{issueId}/runs`はREQ-27の「実行中Run検出」にフロント側（COMP-12）がそのまま利用する。バックエンド側の変更は不要（要件定義書REQ-27の補足どおり）。
 
-**`POST /api/runs/{id}/cancel`と手動中止時の`LoopStopReason`競合状態について（レビューラウンド3で確認）**: 本エンドポイントのハンドラ自体（`engine.CancelAsync(id)`→`loopEngine.StopLoopAsync(issueId)`という同期的な2段呼び出し）に変更はない。指摘されていた競合状態は、このハンドラの外側で非同期に発火する`RunCompleted`イベント（`LoopEngine.HandleRunCompletedAsync`）との到達順序に起因するものであり、対策（`Evaluate`への`completedRun.Status == "canceled"`分岐の追加、およびIssue単位ロック）はCOMP-08側に閉じて実装される。COMP-11は「ロジック判定は一切持たない薄い層」のままで、本エンドポイントの記載・実装に追加変更は不要（3.3節 COMP-08参照）。
+**`POST /api/runs/{id}/cancel`と手動中止時の`LoopStopReason`競合状態について（レビューラウンド3で確認）**: 本エンドポイントのハンドラ自体（`engine.CancelAsync(id)`→`loopEngine.StopLoopAsync(issueId)`という同期的な2段呼び出し）に変更はない。指摘されていた競合状態は、このハンドラの外側で非同期に発火する`RunCompleted`イベント（`LoopEngine.HandleRunCompletedAsync`）との到達順序に起因するものであり、対策（`Evaluate`への`completedRun.Status == "canceled"`分岐の追加、およびIssue単位ロック）はCOMP-08側に閉じて実装される。
+
+COMP-11は「ロジック判定は一切持たない薄い層」のままで、本エンドポイントの記載・実装に追加変更は不要（3.3節 COMP-08参照）。
 
 対応ID: REQ-06, REQ-12, REQ-15, REQ-19, CON-06
 
@@ -584,7 +689,9 @@ function connectRunStream(issueId, runId) {
 
 #### COMP-16 テンプレート既定フラグの編集UI（`app.js`, `index.html`）
 
-**責務**: `PromptTemplate.IsDefaultForStage`（COMP-03）をGUIから設定できるようにする。テンプレート作成フォーム（`index.html`の`#template-form`）と編集フォーム（`app.js`の`renderTemplateDetail`が生成する`#template-edit-form`）の両方に「この工程の既定テンプレートにする」チェックボックスを追加し、`POST`/`PUT /api/templates`のペイロードに含める。同一Stageで別のテンプレートに既にチェックが入っている場合の一意性解決ロジックは`PromptTemplateDefaultResolver`（COMP-03）が持ち、COMP-11のハンドラがその結果を保存する（3.3節参照）。フロント側は単に現在の状態をチェックボックスへ反映するのみ（一覧再取得時に他テンプレートの`isDefaultForStage`が自動的に更新されて見える）。
+**責務**: `PromptTemplate.IsDefaultForStage`（COMP-03）をGUIから設定できるようにする。テンプレート作成フォーム（`index.html`の`#template-form`）と編集フォーム（`app.js`の`renderTemplateDetail`が生成する`#template-edit-form`）の両方に「この工程の既定テンプレートにする」チェックボックスを追加し、`POST`/`PUT /api/templates`のペイロードに含める。
+
+同一Stageで別のテンプレートに既にチェックが入っている場合の一意性解決ロジックは`PromptTemplateDefaultResolver`（COMP-03）が持ち、COMP-11のハンドラがその結果を保存する（3.3節参照）。フロント側は単に現在の状態をチェックボックスへ反映するのみ（一覧再取得時に他テンプレートの`isDefaultForStage`が自動的に更新されて見える）。
 
 対応ID: REQ-15
 
