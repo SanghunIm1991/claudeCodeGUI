@@ -308,6 +308,8 @@ public class LoopEngine
     // Issue単位の排他ロック。StartLoopAsync/StopLoopAsync/HandleRunCompletedAsyncのうち
     // 同一IssueIdを対象とする呼び出し同士を直列化する（後述「手動中止時の競合状態への対策」）。
     // クリティカルセクション内でストアへのawaitを行うため、lockではなくSemaphoreSlim(1,1)を使う。
+    // 3メソッドいずれも「WaitAsync()でロック取得直後にtryへ入り、finallyでReleaseする」形で
+    // 解放を保証する（後述「ロック解放の設計方針」参照）。
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _issueLocks = new();
     private SemaphoreSlim GetIssueLock(string issueId) =>
         _issueLocks.GetOrAdd(issueId, _ => new SemaphoreSlim(1, 1));
@@ -324,21 +326,50 @@ public class LoopEngine
     // 純粋関数: 指定StageのIsDefaultForStage=trueなテンプレートを1件返す（無ければnull）。
     public static PromptTemplate? ResolveDefaultTemplate(IReadOnlyList<PromptTemplate> templates, string stage);
 
-    // 副作用あり: RunCompletedイベントのハンドラ。GetIssueLock(completedRun.IssueId)を保持した区間内で
-    // Evaluateの結果に応じてIssueを更新し、Advanceなら次のRunをClaudeRunEngine.StartAsyncで起動する。
+    // 副作用あり: RunCompletedイベントのハンドラ。GetIssueLock(completedRun.IssueId)を
+    // WaitAsync()で取得した直後からtry/finallyで囲んだ区間内でEvaluateの結果に応じてIssueを更新し、
+    // Advanceなら次のRunをClaudeRunEngine.StartAsyncで起動する。finallyで無条件にReleaseする
+    // （後述「ロック解放の設計方針」参照）。
     public Task HandleRunCompletedAsync(Run completedRun);
 
-    // 副作用あり: 「自律ループ開始」操作（REQ-19）。GetIssueLock(issueId)を保持した区間内で
-    // LoopEnabled/LoopConsecutiveRunCount/LoopStopReasonを初期化し、
-    // 現在のStageの既定テンプレートで最初のRunを起動する。
+    // 副作用あり: 「自律ループ開始」操作（REQ-19）。GetIssueLock(issueId)をWaitAsync()で取得した
+    // 直後からtry/finallyで囲んだ区間内でLoopEnabled/LoopConsecutiveRunCount/LoopStopReasonを初期化し、
+    // 現在のStageの既定テンプレートで最初のRunを起動する。finallyで無条件にReleaseする。
+    // 現在のStageに既定テンプレート（IsDefaultForStage=true）が1件も無い場合はRunを起動せずnullを返す
+    // （後述「StartLoopAsyncの既定テンプレート不在時の戻り値」参照。Evaluateの判定⑥StopNoDefaultTemplateとは
+    // 判定タイミングが異なる別の境界ケース）。
     public Task<RunStartResult?> StartLoopAsync(string issueId);
 
     // 副作用あり: 中止操作からの流用（REQ-19、Program.cs側のcancelハンドラから呼ばれる）。
-    // GetIssueLock(issueId)を保持した区間内でLoopEnabledをfalseに戻す
-    // （LoopStopReasonは変更しない＝手動停止と自動停止を区別）。
+    // GetIssueLock(issueId)をWaitAsync()で取得した直後からtry/finallyで囲んだ区間内でLoopEnabledをfalseに戻す
+    // （LoopStopReasonは変更しない＝手動停止と自動停止を区別）。finallyで無条件にReleaseする。
     public Task StopLoopAsync(string issueId);
 }
 ```
+
+**ロック解放の設計方針（`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`共通、レビュー特例ラウンド4で追記）**: COMP-05の`_activeIssueRuns`同様、「このメソッドでは○○の例外が起きうるので××で対応する」のように個別の例外パターンをその都度列挙して解放処理を書き足す設計にはしない。ただし前提はCOMP-05とは異なる。COMP-05の`StartAsync`はロックの実解放担当が「同期的な`StartAsync`本体」から「非同期のバックグラウンドタスク`ExecuteAsync`」へ引き継がれる構成であり、`backgroundStarted`という成功フラグと2箇所の`finally`（`StartAsync`側・`ExecuteAsync`側）による分担が必要だった。一方、`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`はいずれも単一のasyncメソッド内で「ロック取得→Issueの読み込み・更新・保存（`StartLoopAsync`はさらに`ClaudeRunEngine.StartAsync`呼び出し）→ロック解放」が完結し、バックグラウンドタスクへの引き継ぎは発生しない（`ClaudeRunEngine.StartAsync`の呼び出し自体は行うが、この3メソッドの排他ロックの対象範囲はあくまで「Issueの読み込み〜保存」区間であり、起動したRunの実行完了＝`ExecuteAsync`のバックグラウンド完了まで含める必要はない点はCOMP-05と同様）。
+
+そのため3メソッドいずれも、次の単純な形（1段の`try/finally`のみ、成功フラグ不要）でロック解放を保証する。
+
+```csharp
+public async Task HandleRunCompletedAsync(Run completedRun)
+{
+    await GetIssueLock(completedRun.IssueId).WaitAsync();
+    try
+    {
+        // Issue読み込み → Evaluate呼び出し → Issue更新・保存 → (Advanceなら)StartAsync呼び出し
+        // Ignore等、早期リターンする分岐もすべてこのtry内で完結させる
+    }
+    finally
+    {
+        GetIssueLock(completedRun.IssueId).Release();
+    }
+}
+```
+
+`StartLoopAsync`・`StopLoopAsync`も同型（対象キーは引数の`issueId`そのもの）。`WaitAsync()`自体は`try`の外で呼ぶ（ロックを取得できていない状態で`finally`から`Release()`を呼ぶと`SemaphoreFullException`になるため、取得成功後にのみ`try`区間へ入る）。`try`ブロック本体で発生しうる例外（`JsonFileStore`のI/O例外、`ClaudeRunEngine.StartAsync`内の予期しない例外等）は、COMP-05の(b)経路同様に`catch`を設けず`finally`でのロック解放後にそのまま呼び出し元へ再送出する（`HandleRunCompletedAsync`なら`RunCompleted`イベントの購読側、`StartLoopAsync`/`StopLoopAsync`ならCOMP-11のエンドポイントハンドラ側で、ASP.NET Coreの500応答変換等に委ねられる）。
+
+**ロック解放が保証される根拠**: `try`ブロックの内側が正常終了する経路・例外を送出して終了する経路のいずれであっても、`finally`は必ず実行されるという.NETのtry/finallyの意味論により、`GetIssueLock(...).Release()`の呼び出しが確実に行われる（正常終了時・例外発生時のどちらも同一の`finally`一箇所でカバーされるため、分岐ごとに解放漏れが生じ得ない）。COMP-05のような成功フラグ（`backgroundStarted`相当）や2段階の`finally`が必要になるのは「ロック解放の実担当が別スレッド／別タスクの完了を待って初めて確定する」場合に限られる。本メソッド群はロック取得からIssue更新完了（および`StartLoopAsync`でのRun起動）までが同一の`async`メソッドの呼び出しスタック内で完結するため、単純な1段の`try/finally`で解放保証として必要十分であり、COMP-05方式より単純な形で説明できる。
 
 **`Evaluate`の判定順序**（`LoopDecision`）:
 
@@ -387,6 +418,12 @@ COMP-01が定める「手動停止では`LoopStopReason`を変更しない」と
 | パターンB | ①`HandleRunCompletedAsync`が先にロックを取得しIssueを読む（`StopLoopAsync`はまだロック待ちまたは未呼び出し）→②`StopLoopAsync`が後からロックを取得し`LoopEnabled=false`を保存 | `true`（まだ`StopLoopAsync`が書いていない） | 判定①は非該当（`LoopEnabled==true`）だが判定②`completedRun.Status=="canceled"`で`Ignore`。Issueへの書き込みなしでロック解放 | （②の時点で`Ignore`のため書き込みなし）→その後`StopLoopAsync`が`LoopEnabled=false`を保存。`LoopStopReason`はどちらの経路でも一度も触れられないため`null`のまま |
 
 パターンBが、レビューラウンド3で指摘された「`HandleRunCompletedAsync`のIssue読み込みが`StopLoopAsync`より先に発生する」ケースに相当する。今回の`completedRun.Status == "canceled"`分岐を追加する前の判定順序（①`Ignore`判定のみで、その次が`StopFailed`判定だった構成）では、①が非該当（`LoopEnabled==true`）のためそのまま`StopFailed`に落ちていたが、新設した②の判定により到達順序に関わらず`Ignore`で確定する。ロック（(b)）はパターンA・Bいずれの経路でも`StopLoopAsync`と`HandleRunCompletedAsync`の「読み込み〜保存」区間が互いに割り込まないことを保証し、（今回の直接原因ではないが）将来の分岐追加に対する保険として働く。
+
+**`StartLoopAsync`の既定テンプレート不在時の戻り値（境界ケース、レビュー特例ラウンド4で追記）**: 開始しようとしているStage（`issue.CurrentStage`）に対し`ResolveDefaultTemplate`が`null`を返す場合（＝`IsDefaultForStage=true`のテンプレートが1件も存在しない。COMP-16でユーザーが既定フラグを外し代わりを設定していない状態等）、`StartLoopAsync`はRunを起動せず、Issueの`LoopEnabled`等も変更しないまま（更新前に判定するため書き込みは発生しない）`null`を返す。これはメソッドのシグネチャが`Task<RunStartResult?>`（戻り値型が`RunStartResult?`でnull許容）であることと整合する。
+
+`Evaluate`の判定⑥`StopNoDefaultTemplate`は「ループ稼働中に次工程の既定テンプレートが見つからない」場合の停止理由（`Issue.LoopStopReason`に保存される）であるのに対し、こちらは「ループを開始しようとした時点で最初の既定テンプレートすら無い」という、ループが一度も動き出せない開始前の境界ケースであり、判定タイミングが異なる。そのため`LoopDecision`/`LoopAction`とは別の戻り値（`null`）で表現し、`LoopStopReason`（Issueへ保存される値）も更新しない。呼称の一貫性のため、この状態は`StopNoDefaultTemplate`と対になる概念として「開始時テンプレート未設定」と表記する。
+
+**COMP-11エンドポイント側のHTTPレスポンス仕様**: `POST /api/issues/{issueId}/loop/start`ハンドラは、`loopEngine.StartLoopAsync(issueId)`の戻り値が`null`の場合（開始時テンプレート未設定）、`400 Bad Request`（body例: `{"error": "現在の工程には既定テンプレートが設定されていません"}`）を返す。非nullの場合は既存記載どおり`RunStartResult`を`/api/issues/{issueId}/runs`と同じ形式（`ConflictingRunId`が非nullなら`409 Conflict`、そうでなければ`202 Accepted`）で返す（詳細は3.4節 COMP-11のエンドポイント表を参照）。
 
 **依存関係**: `JsonFileStore<Issue>`, `JsonFileStore<PromptTemplate>`, `ClaudeRunEngine`（`StartAsync`呼び出しと`RunCompleted`購読の両方）。
 
@@ -470,7 +507,7 @@ public class OrphanSweepService
 | PUT | `/api/issues/{id}` | 同上。加えて`LoopEnabled`・`DefaultPermissionMode`をリクエストDTOに追加 | REQ-06, REQ-14, REQ-18 |
 | POST | `/api/templates`, PUT `/api/templates/{id}` | `IsDefaultForStage`受け渡し。一意性の判定は`PromptTemplateDefaultResolver.ResolveDemotions`（COMP-03）を呼び、返ってきた降格対象を保存するだけ（判定ロジック自体はハンドラに持たない） | REQ-15 |
 | POST | `/api/issues/{issueId}/runs` | `engine.StartAsync(...)`の戻り値が`RunStartResult`に変更。`ConflictingRunId`が非nullなら`409 Conflict`（body: `{error, conflictingRunId, run}`）、そうでなければ従来どおり`202 Accepted` | REQ-12 |
-| **POST** | **`/api/issues/{issueId}/loop/start`（新規）** | `loopEngine.StartLoopAsync(issueId)`を呼び、`RunStartResult`を`/api/issues/{issueId}/runs`と同じ形式で返す | REQ-19 |
+| **POST** | **`/api/issues/{issueId}/loop/start`（新規）** | `loopEngine.StartLoopAsync(issueId)`を呼ぶ。戻り値が`null`（開始時テンプレート未設定、3.3節 COMP-08参照）なら`400 Bad Request`、非nullなら`RunStartResult`を`/api/issues/{issueId}/runs`と同じ形式（`202 Accepted`/`409 Conflict`）で返す | REQ-19, REQ-15 |
 | POST | `/api/runs/{id}/cancel` | `engine.CancelAsync(id)`成功後、対象Runの`IssueId`を取得し`loopEngine.StopLoopAsync(issueId)`を呼ぶ | REQ-19, CON-06 |
 
 既存の`GET /api/issues/{issueId}/runs`はREQ-27の「実行中Run検出」にフロント側（COMP-12）がそのまま利用する。バックエンド側の変更は不要（要件定義書REQ-27の補足どおり）。
@@ -528,7 +565,7 @@ function connectRunStream(issueId, runId) {
 
 **責務**: 「自律ループ開始」ボタン、ループ停止状態の表示、Issueごとの既定パーミッションモード選択UIを追加する。既存の「実行」「中止」ボタンの構造は変えず、`.run-controls`内に要素を追加する形とする（CON-02準拠）。
 
-- **開始操作（REQ-19）**: 「実行」ボタンとは別に「自律ループ開始」ボタンを追加。クリックで`POST /api/issues/{id}/loop/start`を呼び、成功時は通常のRun開始と同様に`connectRunStream`へ接続する。
+- **開始操作（REQ-19）**: 「実行」ボタンとは別に「自律ループ開始」ボタンを追加。クリックで`POST /api/issues/{id}/loop/start`を呼び、成功時は通常のRun開始と同様に`connectRunStream`へ接続する。`400 Bad Request`（開始時テンプレート未設定、COMP-08参照）の場合は`err.body.error`を`alert`表示するのみとし、COMP-13の409固有の中止誘導（`confirm`〜`conflictingRunId`への中止呼び出し）とは分岐する。
 - **停止操作（REQ-19）**: 既存の「中止」ボタンをそのまま流用（バックエンド側でループも止まるためフロント側の追加実装は不要）。
 - **既定パーミッションモード（REQ-18）**: Issue編集フォームに`e-default-permission-mode`セレクトを追加し、`PUT /api/issues/{id}`のペイロードに含める。
 - **停止中表示（REQ-17, REQ-20）**: `issue.loopStopReason`が非nullなら、Issue詳細画面のヘッダ付近に「ループ停止中（要確認）: {理由}」のバッジを表示する（`loopStopReason`の値ごとに日本語文言をマッピング: `failed`→「実行失敗」、`limit_reached`→「連続実行上限到達」、`no_default_template`→「既定テンプレート未設定」）。Issue一覧の各行にも同様の短いインジケータ（例: `⚠`）を表示する。
