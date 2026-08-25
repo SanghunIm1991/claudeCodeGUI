@@ -23,7 +23,7 @@
 |---|---|---|---|
 | COMP-01 | 拡張 | `Models/Issue.cs` | 自律ループ関連フィールドの追加 |
 | COMP-02 | 拡張 | `Models/Run.cs` | モック実行・ループ由来フラグの追加 |
-| COMP-03 | 拡張 | `Models/PromptTemplate.cs`, `Data/TemplateSeeder.cs` | Stage既定テンプレートフラグの追加 |
+| COMP-03 | 拡張 | `Models/PromptTemplate.cs`, `Data/TemplateSeeder.cs`, `Services/PromptTemplateDefaultResolver.cs`（新規） | Stage既定テンプレートフラグの追加、一意性解決ロジック |
 | COMP-04 | 拡張 | `appsettings.json` | モックモード・許可ルートの設定項目追加 |
 | COMP-05 | 拡張 | `Services/ClaudeRunEngine.cs` | モック分岐・同時実行排他・完了通知イベント・既存バグ修正 |
 | COMP-06 | 新規 | `Services/MockRunGenerator.cs`（新規ファイル） | モック実行の判定・出力生成ロジック |
@@ -60,6 +60,7 @@ flowchart TB
         Loop["LoopEngine (COMP-08)"]
         Prune["RetentionPruner (COMP-09)"]
         Orphan["OrphanSweepService (COMP-10)"]
+        TmplDefault["PromptTemplateDefaultResolver (COMP-03)"]
         Artifacts["ArtifactService（既存・変更なし）"]
     end
 
@@ -76,6 +77,7 @@ flowchart TB
     Api --> Loop
     Api --> Artifacts
     Api --> Store
+    Api -- "テンプレート保存前の一意性解決" --> TmplDefault
 
     Engine -- "isMock判定・行生成" --> Mock
     Engine -- "RunCompletedイベント" --> Loop
@@ -110,6 +112,8 @@ flowchart TB
 
 **設計判断**: 手動停止（中止ボタン経由、REQ-19）では`LoopStopReason`は変更しない（＝`null`のまま）。「要確認」表示（REQ-17・REQ-20）は`LoopStopReason != null`の場合のみ行う設計とし、ユーザー自身が止めた場合と区別する。
 
+**この方針を崩す競合状態と対策（レビューラウンド3で発見、修正済み）**: 手動中止（`POST /api/runs/{id}/cancel`、COMP-11）は`ClaudeRunEngine.CancelAsync`によるプロセスKillと`LoopEngine.StopLoopAsync`による`LoopEnabled=false`書き込みを同期的に行うが、キャンセルされたRunの完了通知（`RunCompleted`イベント→`LoopEngine.HandleRunCompletedAsync`）はこれとは別の非同期経路で、いつ完了するか保証がない。`HandleRunCompletedAsync`が`StopLoopAsync`より先にIssueを読むと、`issue.LoopEnabled`がまだ`true`のままのため、`completedRun.Status`（Killされた結果`"canceled"`）が`Evaluate`の失敗判定に誤って合流し`LoopStopReason="failed"`が保存されうる。この競合と対策（`Evaluate`の判定順序に`completedRun.Status == "canceled"`を独立した分岐として追加し、到達順序に依存せず`Ignore`となるようにする設計、および`LoopEngine`が持つIssue単位ロックによる排他制御）はCOMP-08で確定する。
+
 対応ID: REQ-14, REQ-17, REQ-18, REQ-20
 
 #### COMP-02 `Run` モデル拡張
@@ -131,7 +135,24 @@ flowchart TB
 |---|---|---|---|
 | `IsDefaultForStage` | bool | `false` | このテンプレートが`Stage`の既定テンプレートか |
 
-**一意性制約**: 「Stageごとに既定は1つまで」という不変条件は、保存時（COMP-11のテンプレート作成/更新ハンドラ）で担保する。同一`Stage`の他テンプレートで`IsDefaultForStage=true`のものがあれば、保存前に`false`へ落とす（フラグを立てたテンプレートが常に唯一の既定になる、後勝ち方式）。この判定自体は`LoopEngine`（COMP-08）ではなく、テンプレートの保存という関心事に閉じているため、テンプレート保存処理の一部として実装する（`Program.cs`のテンプレートPOST/PUTハンドラ内、または`JsonFileStore<PromptTemplate>`を受け取る小さな静的関数として切り出す）。
+**一意性制約**: 「Stageごとに既定は1つまで」という不変条件は、保存時に担保する。同一`Stage`の他テンプレートで`IsDefaultForStage=true`のものがあれば、保存前に`false`へ落とす（フラグを立てたテンプレートが常に唯一の既定になる、後勝ち方式）。
+
+**配置先（レビューラウンド3で修正: HTTPハンドラ内実装の選択肢を削除し、ロジック層に一本化）**: この判定は`Program.cs`のテンプレートPOST/PUTハンドラ内には実装しない（COMP-11「ロジック判定は一切持たない薄い層」という方針と矛盾するため）。判定ロジックはCOMP-03自身が持つ副作用のない静的関数として`Services/PromptTemplateDefaultResolver.cs`（新規ファイル）に切り出す。
+
+```csharp
+public static class PromptTemplateDefaultResolver
+{
+    // 純粋関数: 保存しようとしているテンプレート(candidate)がIsDefaultForStage=trueの場合、
+    // 同一Stageで既に既定になっている他のテンプレート(candidate自身は除く)を返す。
+    // これらは保存前にIsDefaultForStage=falseへ更新すべき対象（後勝ち方式の「負け」側）。
+    // candidate.IsDefaultForStage=falseの場合は一意性への影響がないため常に空リストを返す。
+    // ストア・ファイルには一切触れない（単体テスト対象、NFR-03）。
+    public static IReadOnlyList<PromptTemplate> ResolveDemotions(
+        IReadOnlyList<PromptTemplate> allTemplates, PromptTemplate candidate);
+}
+```
+
+COMP-11のテンプレートPOST/PUTハンドラ（副作用担当）は、①リクエストDTOから`candidate`を構築、②`JsonFileStore<PromptTemplate>.GetAllAsync()`で全件取得、③`ResolveDemotions(allTemplates, candidate)`を呼ぶ、④返ってきた降格対象それぞれの`IsDefaultForStage`を`false`にして保存、⑤`candidate`自身を保存、という手順を踏むだけであり、「同一Stageで既定は1つまで」という判定そのもの（ロジック）は一切持たない。これにより2.節のコンポーネント一覧表のCOMP-03対象ファイルに`Services/PromptTemplateDefaultResolver.cs`が追加される（`Models/PromptTemplate.cs`, `Data/TemplateSeeder.cs`と併せて3ファイル）。
 
 **`TemplateSeeder`の変更**: 初回起動時に投入する5件の既定テンプレートは、それぞれ`IsDefaultForStage = true`で作成する。既定テンプレートが1つも設定されていない状態だと自律ループ（COMP-08）が起動できないため、seed直後から動作する状態にする。
 
@@ -210,6 +231,8 @@ public event Func<Run, Task>? RunCompleted;
 
 **`IsCanceled`のスレッド間可視性**: `RunContext`は既に`_lines`/`_completed`/`_signal`を保護する`private readonly object _lock = new();`を持つ（`Append`・`Complete`・ログ取得側がそれぞれ`lock (_lock) { ... }`で操作する既存実装）。新設する`IsCanceled`フラグも、この既存の`_lock`と同じ排他制御下に置く。具体的には、`CancelAsync`がフラグを立てる箇所（プロセスKillと同時に実行）を`lock (_lock) { IsCanceled = true; }`、`ExecuteAsync`の`finally`がフラグを読む箇所を`lock (_lock) { if (IsCanceled) { ... } }`のように、いずれも`lock (_lock)`越しにアクセスする。専用の`volatile`修飾子や別ロックを新設するのではなく、既存の`_lock`を再利用することで、`CancelAsync`（別スレッド／別タスクから呼ばれうる）が設定した値を`ExecuteAsync`の`finally`が確実に観測できることを保証する（.NETの`lock`はメモリバリアを伴うため、同一ロックを介したwrite→readの順序でスレッド間可視性が保証される）。
 
+**COMP-08との関係（レビューラウンド3で追記）**: 上記の修正により、`RunCompleted`イベントで`LoopEngine.HandleRunCompletedAsync`（COMP-08）に渡される`Run`は、手動中止されたRunであれば`Status`が必ず`"canceled"`になっていることが保証される（`CancelAsync`呼び出しから`RunCompleted`発火までの間に他の値へ書き換わることはない）。COMP-08はこの保証を前提に、`completedRun.Status == "canceled"`を`Evaluate`の判定に直接使うことで、手動停止時に`LoopStopReason`が誤って上書きされる競合状態（COMP-01参照）を、新規フィールドを追加せず解消している。
+
 対応ID: REQ-01, REQ-02, REQ-03, REQ-10, REQ-11, REQ-12, CON-05, CON-08
 
 #### COMP-06 `MockRunGenerator`（新規）
@@ -282,6 +305,13 @@ public class LoopEngine
 {
     public const int MaxConsecutiveRuns = 4; // REQ-20
 
+    // Issue単位の排他ロック。StartLoopAsync/StopLoopAsync/HandleRunCompletedAsyncのうち
+    // 同一IssueIdを対象とする呼び出し同士を直列化する（後述「手動中止時の競合状態への対策」）。
+    // クリティカルセクション内でストアへのawaitを行うため、lockではなくSemaphoreSlim(1,1)を使う。
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _issueLocks = new();
+    private SemaphoreSlim GetIssueLock(string issueId) =>
+        _issueLocks.GetOrAdd(issueId, _ => new SemaphoreSlim(1, 1));
+
     // 純粋関数: Issue/完了したRun/テンプレート一覧から次に取るべき行動を決定する。
     // ストアやファイルには一切触れない（単体テスト対象、NFR-03）。
     public static LoopDecision Evaluate(
@@ -294,16 +324,18 @@ public class LoopEngine
     // 純粋関数: 指定StageのIsDefaultForStage=trueなテンプレートを1件返す（無ければnull）。
     public static PromptTemplate? ResolveDefaultTemplate(IReadOnlyList<PromptTemplate> templates, string stage);
 
-    // 副作用あり: RunCompletedイベントのハンドラ。Evaluateの結果に応じてIssueを更新し、
-    // Advanceなら次のRunをClaudeRunEngine.StartAsyncで起動する。
+    // 副作用あり: RunCompletedイベントのハンドラ。GetIssueLock(completedRun.IssueId)を保持した区間内で
+    // Evaluateの結果に応じてIssueを更新し、Advanceなら次のRunをClaudeRunEngine.StartAsyncで起動する。
     public Task HandleRunCompletedAsync(Run completedRun);
 
-    // 副作用あり: 「自律ループ開始」操作（REQ-19）。LoopEnabled/LoopConsecutiveRunCount/LoopStopReasonを
-    // 初期化し、現在のStageの既定テンプレートで最初のRunを起動する。
+    // 副作用あり: 「自律ループ開始」操作（REQ-19）。GetIssueLock(issueId)を保持した区間内で
+    // LoopEnabled/LoopConsecutiveRunCount/LoopStopReasonを初期化し、
+    // 現在のStageの既定テンプレートで最初のRunを起動する。
     public Task<RunStartResult?> StartLoopAsync(string issueId);
 
     // 副作用あり: 中止操作からの流用（REQ-19、Program.cs側のcancelハンドラから呼ばれる）。
-    // LoopEnabledをfalseに戻す（LoopStopReasonは変更しない＝手動停止と自動停止を区別）。
+    // GetIssueLock(issueId)を保持した区間内でLoopEnabledをfalseに戻す
+    // （LoopStopReasonは変更しない＝手動停止と自動停止を区別）。
     public Task StopLoopAsync(string issueId);
 }
 ```
@@ -311,27 +343,50 @@ public class LoopEngine
 **`Evaluate`の判定順序**（`LoopDecision`）:
 
 1. `completedRun.TriggeredByLoop == false` または `issue.LoopEnabled == false` → `Ignore`（手動実行はトリガーにしない＝REQ-21。既にループが止まっている場合も無視）
-2. `completedRun.Status != "succeeded"` → `StopFailed`（REQ-17）
-3. `GetNextStage(issue.CurrentStage)`が`null`（最終工程`deployment`が成功） → `Complete`（REQ-16、呼び出し側で`Issue.Status="done"`, `LoopEnabled=false`に設定）
-4. `issue.LoopConsecutiveRunCount > maxConsecutiveRuns` → `StopLimitReached`（REQ-20。比較演算子は`>`であって`>=`ではない点に注意。理由は次項「連続実行回数の数え方」のオフバイワン修正を参照）
-5. 次工程の既定テンプレートが存在しない → `StopNoDefaultTemplate`（REQ-15が未設定の場合の安全な停止。要件には明記のない境界ケースだが、無限に失敗し続けるより安全に止める設計とした）
-6. 上記いずれでもなければ → `Advance`（`Issue.CurrentStage`を次工程に更新し、`LoopConsecutiveRunCount`をインクリメントしてから次Runを起動）
+2. `completedRun.Status == "canceled"` → `Ignore`（**レビューラウンド3で追加**。手動中止＝REQ-19由来のRunをループ継続のトリガーにしない。この判定を①より後・③StopFailed判定より前に置く理由は次々項「手動中止時のLoopStopReason競合状態への対策」を参照）
+3. `completedRun.Status != "succeeded"` → `StopFailed`（REQ-17）
+4. `GetNextStage(issue.CurrentStage)`が`null`（最終工程`deployment`が成功） → `Complete`（REQ-16、呼び出し側で`Issue.Status="done"`, `LoopEnabled=false`に設定）
+5. `issue.LoopConsecutiveRunCount > maxConsecutiveRuns` → `StopLimitReached`（REQ-20。比較演算子は`>`であって`>=`ではない点に注意。理由は次項「連続実行回数の数え方」のオフバイワン修正を参照）
+6. 次工程の既定テンプレートが存在しない → `StopNoDefaultTemplate`（REQ-15が未設定の場合の安全な停止。要件には明記のない境界ケースだが、無限に失敗し続けるより安全に止める設計とした）
+7. 上記いずれでもなければ → `Advance`（`Issue.CurrentStage`を次工程に更新し、`LoopConsecutiveRunCount`をインクリメントしてから次Runを起動）
 
 **連続実行回数の数え方（REQ-20の解釈）**: 「4回」は自律ループが**起動したRunの数**（`TriggeredByLoop=true`のRun数）の上限とする。`StartLoopAsync`が最初のRunを起動する時点で`LoopConsecutiveRunCount=1`とし、`Advance`判定のたびにインクリメントする。
 
-**設計時に発見したオフバイワン（修正済み）**: 判定④の比較を`issue.LoopConsecutiveRunCount >= maxConsecutiveRuns`（`>=`）としていた初期案では、既定Issueが`requirements`から失敗なく5工程を完走しようとするケースで、`testing`工程完了時点（`LoopConsecutiveRunCount=4`）に③（`deployment`はまだ次工程が存在するため`Complete`にならず通過）の直後で④が真になって`StopLimitReached`が発火し、5件目（`deployment`）のRunが一度も起動されないバグがあった。`architecture-overview.md` 4.6節#7が意図する「上限4回＝5工程を最後まで自動で通すのに必要な最小回数（工程間の遷移4回）」を実現するため、④の比較演算子を`>`（超過）に修正した。`issue.LoopConsecutiveRunCount`自体の初期値（`StartLoopAsync`時点で1）・インクリメントタイミング（`Advance`のたび）は変更していない。
+**設計時に発見したオフバイワン（修正済み）**: 判定⑤の比較を`issue.LoopConsecutiveRunCount >= maxConsecutiveRuns`（`>=`）としていた初期案では、既定Issueが`requirements`から失敗なく5工程を完走しようとするケースで、`testing`工程完了時点（`LoopConsecutiveRunCount=4`）に④（`deployment`はまだ次工程が存在するため`Complete`にならず通過）の直後で⑤が真になって`StopLimitReached`が発火し、5件目（`deployment`）のRunが一度も起動されないバグがあった。`architecture-overview.md` 4.6節#7が意図する「上限4回＝5工程を最後まで自動で通すのに必要な最小回数（工程間の遷移4回）」を実現するため、⑤の比較演算子を`>`（超過）に修正した。`issue.LoopConsecutiveRunCount`自体の初期値（`StartLoopAsync`時点で1）・インクリメントタイミング（`Advance`のたび）は変更していない。
 
 **トレース（既定設定・上限4、Issueを`CurrentStage=requirements`から開始し失敗なく完走するケース）**:
 
-| Run完了時のStage | 完了時の`LoopConsecutiveRunCount` | ④の判定（`> 4`） | 結果 |
+| Run完了時のStage | 完了時の`LoopConsecutiveRunCount` | ⑤の判定（`> 4`） | 結果 |
 |---|---|---|---|
-| requirements | 1 | 1 > 4 は偽 | ③次工程`design`あり→非該当、④通過→⑥Advance。`CurrentStage=design`, count→2、Run2起動 |
-| design | 2 | 2 > 4 は偽 | ③次工程`implementation`あり→非該当、④通過→⑥Advance。`CurrentStage=implementation`, count→3、Run3起動 |
-| implementation | 3 | 3 > 4 は偽 | ③次工程`testing`あり→非該当、④通過→⑥Advance。`CurrentStage=testing`, count→4、Run4起動 |
-| testing | 4 | 4 > 4 は偽 | ③次工程`deployment`あり→非該当、④通過→⑥Advance。`CurrentStage=deployment`, count→5、Run5起動 |
-| deployment | 5 | （③で確定するため④は評価されない） | ③`GetNextStage(deployment)=null`→`Complete`。`Issue.Status=done`, `LoopEnabled=false` |
+| requirements | 1 | 1 > 4 は偽 | ④次工程`design`あり→非該当、⑤通過→⑦Advance。`CurrentStage=design`, count→2、Run2起動 |
+| design | 2 | 2 > 4 は偽 | ④次工程`implementation`あり→非該当、⑤通過→⑦Advance。`CurrentStage=implementation`, count→3、Run3起動 |
+| implementation | 3 | 3 > 4 は偽 | ④次工程`testing`あり→非該当、⑤通過→⑦Advance。`CurrentStage=testing`, count→4、Run4起動 |
+| testing | 4 | 4 > 4 は偽 | ④次工程`deployment`あり→非該当、⑤通過→⑦Advance。`CurrentStage=deployment`, count→5、Run5起動 |
+| deployment | 5 | （④で確定するため⑤は評価されない） | ④`GetNextStage(deployment)=null`→`Complete`。`Issue.Status=done`, `LoopEnabled=false` |
 
-`deployment`完了時点では`LoopConsecutiveRunCount=5`（上限4を上回っている）が、判定順序上③（`Complete`）が④（`StopLimitReached`）より先に評価されるため上限には抵触しない。上限が実際に`StopLimitReached`として効くのは、最大`maxConsecutiveRuns`回のAdvanceを終えてもなお次工程が存在する場合（テンプレート構成の不備・将来の工程追加等、既定の5工程パイプラインでは通常発生しない想定外のケース）に限られる、という安全弁としての位置づけである。既存Issueを`design`以降のStageで作成しループを開始した場合は当然5件未満で完走しうるため、なおさら上限に達することはない。
+`deployment`完了時点では`LoopConsecutiveRunCount=5`（上限4を上回っている）が、判定順序上④（`Complete`）が⑤（`StopLimitReached`）より先に評価されるため上限には抵触しない。上限が実際に`StopLimitReached`として効くのは、最大`maxConsecutiveRuns`回のAdvanceを終えてもなお次工程が存在する場合（テンプレート構成の不備・将来の工程追加等、既定の5工程パイプラインでは通常発生しない想定外のケース）に限られる、という安全弁としての位置づけである。既存Issueを`design`以降のStageで作成しループを開始した場合は当然5件未満で完走しうるため、なおさら上限に達することはない。
+
+**手動中止時のLoopStopReason競合状態への対策（レビューラウンド3で修正）**:
+
+COMP-01が定める「手動停止では`LoopStopReason`を変更しない」という方針は、以下の競合状態で崩れうることが判明した。
+
+1. ユーザーが中止ボタンを押す→`POST /api/runs/{id}/cancel`（COMP-11）が`engine.CancelAsync(id)`を呼び、成功後に同期的に`loopEngine.StopLoopAsync(issueId)`を呼ぶ（`Issue.LoopEnabled=false`を保存）。
+2. 一方、`CancelAsync`によるプロセスKillの実際の終了検知と`ExecuteAsync`側`finally`の実行（`RunCompleted`イベント発火→`HandleRunCompletedAsync`）は、`CancelAsync`の呼び出しとは独立した非同期のバックグラウンドタスクであり、`StopLoopAsync`の完了より先に走ることも後に走ることも起こりうる。
+3. もし`HandleRunCompletedAsync`のIssue読み込みが`StopLoopAsync`の書き込みより先に発生すると、`issue.LoopEnabled`はまだ`true`のままなので判定①（`TriggeredByLoop`/`LoopEnabled`による`Ignore`）に該当せず、`completedRun.Status`（`"canceled"`）が`!= "succeeded"`のため`StopFailed`と誤判定され、`LoopStopReason="failed"`が保存されてしまう。
+
+**対策は2本立てとする**（どちらか一方だけでは不十分）:
+
+- **(a) 到達順序に依存しない判定への変更**: 上記`Evaluate`の判定順序に②`completedRun.Status == "canceled" → Ignore`を追加した。単に「`_active`からの除去タイミング」や「`StopLoopAsync`との実行順序」に頼るのではなく、`completedRun.Status`という**`HandleRunCompletedAsync`が呼ばれた時点で既に確定している値**（COMP-05の既存バグ修正により、`RunCompleted`発火前に`run.Status`は必ず`"canceled"`へ揃っている）で判定するため、`StopLoopAsync`が先でも後でも常に`Ignore`となり、`LoopStopReason`は書き換わらない。新規フィールドの追加は不要（`RunContext.IsCanceled`をそのまま流用する形＝`IsCanceled`が確定させた`Run.Status`を読むだけ）。
+- **(b) Issue単位の排他ロック**: (a)により今回報告された誤判定の直接原因は解消するが、`StartLoopAsync`/`StopLoopAsync`/`HandleRunCompletedAsync`はいずれも「Issueを読む→フィールドを書き換える→保存する」という複数ステップの操作であり、同一Issueに対しこれらが真に同時並行で実行された場合は一般に**Lost Update**（後勝ちの保存が先勝ちの変更を消してしまう）が起こりうる。将来`Evaluate`の分岐が増える等の変更が入っても安全なように、上記コード例の`_issueLocks`（`ConcurrentDictionary<string, SemaphoreSlim>`、キーは`IssueId`）で3メソッドの「読み込み〜保存」区間を同一Issueについて直列化する。対象範囲は**Issue単位**（グローバルロックではない）とし、別Issueへの操作は並行実行を妨げない。`SemaphoreSlim`を選ぶ理由は、クリティカルセクション内に`JsonFileStore`への`await`呼び出しを含むため（C#の`lock`ステートメントは`await`をまたげない）。エントリは`GetOrAdd`で作成後も明示的には破棄しない（Issue数がローカルツールの規模で少数にとどまるため許容する設計判断）。
+
+**トレース（2通りの到達順序パターンで、いずれも`LoopStopReason`が`null`のまま保たれることを確認）**:
+
+| # | 時系列 | `HandleRunCompletedAsync`到達時の`issue.LoopEnabled` | `Evaluate`の判定 | 最終的な`Issue`状態 |
+|---|---|---|---|---|
+| パターンA | ①`StopLoopAsync`が先に完了（`LoopEnabled=false`保存・ロック解放）→②`HandleRunCompletedAsync`がロック取得しIssueを読む | `false` | 判定①`issue.LoopEnabled==false`で即`Ignore` | `LoopEnabled=false`, `LoopStopReason=null`（変更なし） |
+| パターンB | ①`HandleRunCompletedAsync`が先にロックを取得しIssueを読む（`StopLoopAsync`はまだロック待ちまたは未呼び出し）→②`StopLoopAsync`が後からロックを取得し`LoopEnabled=false`を保存 | `true`（まだ`StopLoopAsync`が書いていない） | 判定①は非該当（`LoopEnabled==true`）だが判定②`completedRun.Status=="canceled"`で`Ignore`。Issueへの書き込みなしでロック解放 | （②の時点で`Ignore`のため書き込みなし）→その後`StopLoopAsync`が`LoopEnabled=false`を保存。`LoopStopReason`はどちらの経路でも一度も触れられないため`null`のまま |
+
+パターンBが、レビューラウンド3で指摘された「`HandleRunCompletedAsync`のIssue読み込みが`StopLoopAsync`より先に発生する」ケースに相当する。今回の`completedRun.Status == "canceled"`分岐を追加する前の判定順序（①`Ignore`判定のみで、その次が`StopFailed`判定だった構成）では、①が非該当（`LoopEnabled==true`）のためそのまま`StopFailed`に落ちていたが、新設した②の判定により到達順序に関わらず`Ignore`で確定する。ロック（(b)）はパターンA・Bいずれの経路でも`StopLoopAsync`と`HandleRunCompletedAsync`の「読み込み〜保存」区間が互いに割り込まないことを保証し、（今回の直接原因ではないが）将来の分岐追加に対する保険として働く。
 
 **依存関係**: `JsonFileStore<Issue>`, `JsonFileStore<PromptTemplate>`, `ClaudeRunEngine`（`StartAsync`呼び出しと`RunCompleted`購読の両方）。
 
@@ -413,12 +468,14 @@ public class OrphanSweepService
 |---|---|---|---|
 | POST | `/api/issues` | `TargetPathValidator.IsAllowed`でNGなら`400 Bad Request` | REQ-06 |
 | PUT | `/api/issues/{id}` | 同上。加えて`LoopEnabled`・`DefaultPermissionMode`をリクエストDTOに追加 | REQ-06, REQ-14, REQ-18 |
-| POST | `/api/templates`, PUT `/api/templates/{id}` | `IsDefaultForStage`受け渡し＋同一Stage内の既定一意性を保存前に解決 | REQ-15 |
+| POST | `/api/templates`, PUT `/api/templates/{id}` | `IsDefaultForStage`受け渡し。一意性の判定は`PromptTemplateDefaultResolver.ResolveDemotions`（COMP-03）を呼び、返ってきた降格対象を保存するだけ（判定ロジック自体はハンドラに持たない） | REQ-15 |
 | POST | `/api/issues/{issueId}/runs` | `engine.StartAsync(...)`の戻り値が`RunStartResult`に変更。`ConflictingRunId`が非nullなら`409 Conflict`（body: `{error, conflictingRunId, run}`）、そうでなければ従来どおり`202 Accepted` | REQ-12 |
 | **POST** | **`/api/issues/{issueId}/loop/start`（新規）** | `loopEngine.StartLoopAsync(issueId)`を呼び、`RunStartResult`を`/api/issues/{issueId}/runs`と同じ形式で返す | REQ-19 |
 | POST | `/api/runs/{id}/cancel` | `engine.CancelAsync(id)`成功後、対象Runの`IssueId`を取得し`loopEngine.StopLoopAsync(issueId)`を呼ぶ | REQ-19, CON-06 |
 
 既存の`GET /api/issues/{issueId}/runs`はREQ-27の「実行中Run検出」にフロント側（COMP-12）がそのまま利用する。バックエンド側の変更は不要（要件定義書REQ-27の補足どおり）。
+
+**`POST /api/runs/{id}/cancel`と手動中止時の`LoopStopReason`競合状態について（レビューラウンド3で確認）**: 本エンドポイントのハンドラ自体（`engine.CancelAsync(id)`→`loopEngine.StopLoopAsync(issueId)`という同期的な2段呼び出し）に変更はない。指摘されていた競合状態は、このハンドラの外側で非同期に発火する`RunCompleted`イベント（`LoopEngine.HandleRunCompletedAsync`）との到達順序に起因するものであり、対策（`Evaluate`への`completedRun.Status == "canceled"`分岐の追加、およびIssue単位ロック）はCOMP-08側に閉じて実装される。COMP-11は「ロジック判定は一切持たない薄い層」のままで、本エンドポイントの記載・実装に追加変更は不要（3.3節 COMP-08参照）。
 
 対応ID: REQ-06, REQ-12, REQ-15, REQ-19, CON-06
 
@@ -490,7 +547,7 @@ function connectRunStream(issueId, runId) {
 
 #### COMP-16 テンプレート既定フラグの編集UI（`app.js`, `index.html`）
 
-**責務**: `PromptTemplate.IsDefaultForStage`（COMP-03）をGUIから設定できるようにする。テンプレート作成フォーム（`index.html`の`#template-form`）と編集フォーム（`app.js`の`renderTemplateDetail`が生成する`#template-edit-form`）の両方に「この工程の既定テンプレートにする」チェックボックスを追加し、`POST`/`PUT /api/templates`のペイロードに含める。同一Stageで別のテンプレートに既にチェックが入っている場合の一意性解決はCOMP-11（バックエンド）側の責務であり、フロント側は単に現在の状態をチェックボックスへ反映するのみ（一覧再取得時に他テンプレートの`isDefaultForStage`が自動的に更新されて見える）。
+**責務**: `PromptTemplate.IsDefaultForStage`（COMP-03）をGUIから設定できるようにする。テンプレート作成フォーム（`index.html`の`#template-form`）と編集フォーム（`app.js`の`renderTemplateDetail`が生成する`#template-edit-form`）の両方に「この工程の既定テンプレートにする」チェックボックスを追加し、`POST`/`PUT /api/templates`のペイロードに含める。同一Stageで別のテンプレートに既にチェックが入っている場合の一意性解決ロジックは`PromptTemplateDefaultResolver`（COMP-03）が持ち、COMP-11のハンドラがその結果を保存する（3.3節参照）。フロント側は単に現在の状態をチェックボックスへ反映するのみ（一覧再取得時に他テンプレートの`isDefaultForStage`が自動的に更新されて見える）。
 
 対応ID: REQ-15
 
@@ -541,9 +598,13 @@ sequenceDiagram
 
     Note over Engine: Run完了 (ExecuteAsyncのfinally)
     Engine ->> Loop: RunCompletedイベント(run)
+    Loop ->> Loop: GetIssueLock(run.IssueId).WaitAsync()
     Loop ->> IssueStore: GetAsync(run.IssueId)
     IssueStore -->> Loop: issue
     alt issue.LoopEnabled == false または run.TriggeredByLoop == false
+        Loop -->> Engine: (Ignore、何もしない)
+    else run.Status == "canceled"
+        Note over Loop: 手動中止由来。到達順序に関わらずIgnore（LoopStopReasonを書き換えない）
         Loop -->> Engine: (Ignore、何もしない)
     else run.Status != "succeeded"
         Loop ->> IssueStore: SaveAsync(issue with LoopEnabled=false, LoopStopReason="failed")
@@ -559,6 +620,7 @@ sequenceDiagram
         Loop ->> IssueStore: SaveAsync(issue with CurrentStage=nextStage, LoopConsecutiveRunCount+1)
         Loop ->> Engine: StartAsync(issue, nextTemplate, issue.DefaultPermissionMode, triggeredByLoop:true)
     end
+    Loop ->> Loop: GetIssueLock(run.IssueId).Release()
 ```
 
 ### 4.2 同時実行の排他制御とSSE再接続・ループ停止の連携
@@ -580,6 +642,7 @@ sequenceDiagram
         Api ->> Engine: CancelAsync(conflictingRunId)
         Engine -->> Api: true
         Api ->> Loop: StopLoopAsync(issueId)
+        Note over Loop: GetIssueLock(issueId)で排他区間に入りLoopEnabled=falseを保存。<br/>Engine側でExecuteAsyncのfinallyがRunCompletedを発火するのが<br/>本呼び出しの前後どちらでも、4.1のIgnore分岐によりLoopStopReasonは書き換わらない
     else 実行中Runなし
         Engine -->> Api: RunStartResult(run, null)
         Api -->> Browser: 202 Accepted {run}
