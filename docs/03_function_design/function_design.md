@@ -50,9 +50,9 @@
 flowchart TD
     Start["LoopEngine.StartLoopAsync\n（ループ開始/再開）"] -->|null へリセット| ValNull["null"]
     HandleRC["LoopEngine.HandleRunCompletedAsync"] --> Eval{"Evaluateの結果"}
-    Eval -->|StopFailed| ValFailed["'failed'"]
-    Eval -->|StopLimitReached| ValLimit["'limit_reached'"]
-    Eval -->|StopNoDefaultTemplate| ValNoTpl["'no_default_template'"]
+    Eval -->|StopFailed| ValFailed["&quot;failed&quot;"]
+    Eval -->|StopLimitReached| ValLimit["&quot;limit_reached&quot;"]
+    Eval -->|StopNoDefaultTemplate| ValNoTpl["&quot;no_default_template&quot;"]
     Eval -->|Complete| ValUnchanged["変更しない（nullのまま）"]
     Stop["LoopEngine.StopLoopAsync\n（手動停止）"] -.->|書き込みなし| ValKeep["null のまま据え置き"]
 
@@ -72,11 +72,11 @@ flowchart TD
 
 初期化用ファクトリメソッド・バリデーションメソッドについても検討したが、以下の理由により追加不要と判断した。
 
-**理由1: 初期化の単純さ**
+##### 理由1: 初期化の単純さ
 
 4プロパティはいずれも単純な既定値（`false`/`"acceptEdits"`/`0`/`null`）で足り、既存3プロパティ同様プロパティ初期化子で完結する。相互に依存する初期化順序や複合的な不変条件（invariant）が存在しない。
 
-**理由2: `DefaultPermissionMode`の妥当性検証について**
+##### 理由2: `DefaultPermissionMode`の妥当性検証について
 
 `DefaultPermissionMode`が既知の値（`"acceptEdits"`等、CON-04が現状維持するプルダウンの選択肢）かどうかの妥当性検証について確認したところ、`component_design.md`の以下いずれの節にも、この値を検証する処理は存在しないことが分かった。
 
