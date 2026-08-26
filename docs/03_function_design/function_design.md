@@ -286,3 +286,28 @@ flowchart TD
 **`ResolveDemotions`（2.3.2）を呼ばない理由**: seed実行時は`store`が空であることが呼び出し条件（分岐#1）であり、5件のStageは互いに異なるため、同一Stage内で複数の`IsDefaultForStage = true`が競合する状況がそもそも発生しない。したがって一意性解決ロジックを介さず直接`SaveAsync`する設計で不変条件（Stageごとに既定は1つまで）は保たれる。一意性解決が必要になるのは、seed後にCOMP-11経由でテンプレートが追加・変更される実行時経路（2.3.2「呼び出し元」参照）のみである。
 
 対応ID: REQ-15
+
+### 2.4 COMP-04 `appsettings.json` 拡張
+
+**対象ファイル**: `src/ClaudeCodeGui/appsettings.json`
+
+**関数設計の要否についての判断**: COMP-04はコンポーネント設計書3.2節で「設定値の追加のみ」と位置づけられており、追加される`ClaudeCli:MockMode`・`Security:AllowedProjectRoots`の2設定項目は単純な構成設定値である（`ClaudeCli:Path`と同じく、アプリ起動時の設定オブジェクトへの読み込みのみ。POCO またはレコード型のプロパティとして定義・読み取りされ、`appsettings.json`自体には振る舞いロジックは存在しない）。
+
+本コンポーネントには独立した関数はなく、各設定値の読み取りは利用側コンポーネント（COMP-05, COMP-06, COMP-07）の関数設計側で規定する。以下は、その依存関係を明確にするための「設定値×読み取り元」対応表である（COMP-01「プロパティ×読み書き元」表と同じ形式を転用、設定値を読み書きする関数を特定するもの）。
+
+#### 追加設定値と読み取り元
+
+| 設定値 | 型 | 既定値 | 意味 | 読み取り元 |
+|---|---|---|---|---|
+| `ClaudeCli:MockMode` | `bool` | `false` | モック実行モードの有効化（REQ-01, CON-01） | `COMP-06 MockRunGenerator.ShouldUseMock(configMockMode, cliPath)`（純粋関数。`COMP-05 ClaudeRunEngine.StartAsync`が呼び出す） |
+| `Security:AllowedProjectRoots` | `string[]` | `[]`（空配列） | `TargetProjectPath`許可ルート群。空＝制限なし（REQ-06） | `COMP-07 TargetPathValidator`のコンストラクタに`IReadOnlyList<string> allowedRoots`として渡され、`IsWithinAllowedRoots(targetPath, allowedRoots)`内で参照される。DIで構成。`COMP-11 Program.cs`のエンドポイント実装側で、ハンドラから利用中の`TargetPathValidator`インスタンスが行う検証（`IsAllowed`メソッド）へ渡される |
+
+#### 補足: 構成値の読み取り箇所（実装段階で確定される詳細）
+
+ASP.NET Core の標準設定解決（`appsettings.json` → `IConfiguration` → `IOptions<T>`）により、上記2設定値は以下の流れで読み込まれる（関数設計段階では型・意味のみ規定し、具体的な`AddOptions`/`Configure`の実装形態はCOMP-11の実装工程で確定）。
+
+1. `appsettings.json`読み込み時に`ClaudeCli:MockMode`・`Security:AllowedProjectRoots`が`IConfiguration`へロードされる
+2. `COMP-06 MockRunGenerator.ShouldUseMock`は`bool configMockMode`引数を受け取り、呼び出し側（`COMP-05 ClaudeRunEngine.StartAsync`）が`IConfiguration`またはオプションインスタンスから読み出した値をそのまま渡す
+3. `COMP-07 TargetPathValidator`はコンストラクタ時にDI経由で`IReadOnlyList<string> allowedRoots`を受け取り、その後の`IsWithinAllowedRoots`呼び出しに使用する。設定値の読み込みそのものはDIコンテナ側（`COMP-11 Program.cs`）で行い、本コンポーネントは受け取った値を利用するのみ
+
+対応ID: REQ-01, CON-01, REQ-06

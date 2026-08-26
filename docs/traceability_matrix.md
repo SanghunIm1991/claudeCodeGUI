@@ -58,7 +58,7 @@
 | COMP-01 Issue モデル拡張 | (関数なし。プロパティの読み書きはCOMP-08/COMP-11/COMP-14の関数設計側で規定) |
 | COMP-02 Run モデル拡張 | (関数なし。プロパティの読み書きはCOMP-05/COMP-08の関数設計側で規定) |
 | COMP-03 PromptTemplate モデル拡張 / TemplateSeeder変更 | `PromptTemplateDefaultResolver.ResolveDemotions`（新規・純粋関数）, `TemplateSeeder.SeedDefaultsAsync`（既存関数の変更）。`IsDefaultForStage`プロパティ自体はCOMP-01/02と同様、独立した関数を持たず読み書き元（COMP-03自身の`ResolveDemotions`、COMP-08の`ResolveDefaultTemplate`、COMP-16）に委譲 |
-| COMP-04 appsettings.json 拡張 | |
+| COMP-04 appsettings.json 拡張 | (関数なし。設定値の読み取りはCOMP-05/COMP-06/COMP-07の関数設計側で規定。関数設計書2.4節参照) |
 | COMP-05 ClaudeRunEngine 拡張 | |
 | COMP-06 MockRunGenerator（新規） | |
 | COMP-07 TargetPathValidator（新規） | |
