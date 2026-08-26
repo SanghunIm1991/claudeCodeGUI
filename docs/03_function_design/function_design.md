@@ -300,7 +300,7 @@ flowchart TD
 | 設定値 | 型 | 既定値 | 意味 | 読み取り元 |
 |---|---|---|---|---|
 | `ClaudeCli:MockMode` | `bool` | `false` | モック実行モードの有効化（REQ-01, CON-01） | `COMP-06 MockRunGenerator.ShouldUseMock(configMockMode, cliPath)`（純粋関数。`COMP-05 ClaudeRunEngine.StartAsync`が呼び出す） |
-| `Security:AllowedProjectRoots` | `string[]` | `[]`（空配列） | `TargetProjectPath`許可ルート群。空＝制限なし（REQ-06） | `COMP-07 TargetPathValidator`のコンストラクタに`IReadOnlyList<string> allowedRoots`として渡され、`IsWithinAllowedRoots(targetPath, allowedRoots)`内で参照される。DIで構成。`COMP-11 Program.cs`のエンドポイント実装側で、ハンドラから利用中の`TargetPathValidator`インスタンスが行う検証（`IsAllowed`メソッド）へ渡される |
+| `Security:AllowedProjectRoots` | `string[]` | `[]`（空配列） | `TargetProjectPath`許可ルート群。空＝制限なし（REQ-06） | `AllowedProjectRoots`の値はCOMP-11のDI構成時に`TargetPathValidator`のコンストラクタへ一度だけ束縛され、以降各リクエストでの`IsAllowed(targetPath)`呼び出し時は既に束縛済みの値が参照される |
 
 #### 補足: 構成値の読み取り箇所（実装段階で確定される詳細）
 
