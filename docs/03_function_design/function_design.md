@@ -184,7 +184,7 @@ component_design.md 3.5節COMP-12は、この`startRun`のEventSource接続部�
 
 **対象ファイル**: `src/ClaudeCodeGui/Models/PromptTemplate.cs`, `src/ClaudeCodeGui/Data/TemplateSeeder.cs`, `src/ClaudeCodeGui/Services/PromptTemplateDefaultResolver.cs`（新規）
 
-**COMP-01/02との違い**: COMP-01（`Issue`）・COMP-02（`Run`）はいずれも「振る舞いを持たないデータ構造の追加のみ」で独立した関数が不要だったのに対し、COMP-03はモデル拡張（`PromptTemplate.IsDefaultForStage`）に加え、`Stageごとに既定は1つまで」という不変条件を担保する副作用のないロジック関数`PromptTemplateDefaultResolver.ResolveDemotions`（component_design.md 3.1節、レビューラウンド3でHTTPハンドラ内実装の選択肢を削除しロジック層へ一本化）を新規に持つ。以下、モデル拡張部分（2.3.1）とロジック関数部分（2.3.2）を分けて記載する。
+**COMP-01/02との違い**: COMP-01（`Issue`）・COMP-02（`Run`）はいずれも「振る舞いを持たないデータ構造の追加のみ」で独立した関数が不要だったのに対し、COMP-03はモデル拡張（`PromptTemplate.IsDefaultForStage`）に加え、「Stageごとに既定は1つまで」という不変条件を担保する副作用のないロジック関数`PromptTemplateDefaultResolver.ResolveDemotions`（component_design.md 3.1節、レビューラウンド3でHTTPハンドラ内実装の選択肢を削除しロジック層へ一本化）を新規に持つ。以下、モデル拡張部分（2.3.1）とロジック関数部分（2.3.2）を分けて記載する。
 
 #### 2.3.1 モデル拡張: `PromptTemplate.IsDefaultForStage`
 
@@ -225,18 +225,39 @@ public static class PromptTemplateDefaultResolver
 - `allTemplates`・`candidate`いずれも変更しない（副作用なし）。新しいリストを構築して返す。
 - 同一Stageに`IsDefaultForStage == true`のテンプレートが（データ不整合等により）2件以上existingですでに存在するケースでも、`candidate`以外の該当するもの全てを返す（1件のみを返す設計にはしない）。呼び出し元がこれら全てを`false`へ更新して保存すれば、結果的に不変条件（Stageごとに既定は1つまで）が自己修復される。
 
+##### `ResolveDemotions`のアルゴリズム（補足図）
+
+上記の事後条件をフローチャートで整理すると以下のとおり。`candidate`自身はId一致により判定対象から常に除外される点、および`candidate.IsDefaultForStage`が`true`のときのみ`allTemplates`側のフィルタリングが行われる点が要点である。
+
+```mermaid
+flowchart TD
+    Start(["ResolveDemotions(allTemplates, candidate)"]) --> Flag{"candidate.IsDefaultForStage"}
+    Flag -->|false| Empty["空リストを返す\n（allTemplatesの内容に関わらず一意性への影響がないため判定不要）"]
+    Flag -->|true| Filter["allTemplatesから抽出:\n・Id ≠ candidate.Id（自分自身を除外）\n・Stage = candidate.Stage\n・IsDefaultForStage = true"]
+    Filter --> Matches["該当する全件を返す（0件以上）\n＝保存前にfalseへ降格すべき「後勝ち方式の負け側」"]
+```
+
 **代表的な境界値・分岐条件**:
 
-| # | `allTemplates` | `candidate.IsDefaultForStage` | 期待される戻り値 |
-|---|---|---|---|
-| 1 | 空リスト | `true` | 空リスト（対象が存在しないため） |
-| 2 | 空リスト | `false` | 空リスト |
-| 3 | 同一Stageの既存default trueがcandidate自身のみ（PUTで他に競合なし） | `true` | 空リスト（Id一致で自己除外され、他に該当なし） |
-| 4 | 同一Stageに他テンプレート1件が`IsDefaultForStage=true` | `true` | その1件を含むリスト（1件） |
-| 5 | 異なるStageに`IsDefaultForStage=true`のテンプレートが存在 | `true` | 空リスト（Stage不一致のため対象外） |
-| 6 | 同一Stageに他テンプレートが複数あるが全て`IsDefaultForStage=false` | `true` | 空リスト（降格対象なし、`false`のテンプレートは元々対象外） |
-| 7 | 同一Stageに（データ不整合により）`IsDefaultForStage=true`が2件以上存在（candidate以外） | `true` | 該当する全件（2件以上） |
-| 8 | 任意 | `false` | 空リスト（`allTemplates`の内容に関わらず） |
+`candidate.IsDefaultForStage`の値によって分岐が大きく二分される（`false`なら`allTemplates`の内容によらず常に空リスト、`true`なら`allTemplates`側の状態に応じて戻り値が変わる）ため、以下では値ごとに表を分けて示す（#は元の8パターンの通し番号）。
+
+###### `candidate.IsDefaultForStage == false`の場合
+
+| # | `allTemplates` | 期待される戻り値 |
+|---|---|---|
+| 2 | 空リスト | 空リスト |
+| 8 | 任意 | 空リスト（`allTemplates`の内容に関わらず） |
+
+###### `candidate.IsDefaultForStage == true`の場合
+
+| # | `allTemplates` | 期待される戻り値 |
+|---|---|---|
+| 1 | 空リスト | 空リスト（対象が存在しないため） |
+| 3 | 同一Stageの既存default trueがcandidate自身のみ（PUTで他に競合なし） | 空リスト（Id一致で自己除外され、他に該当なし） |
+| 4 | 同一Stageに他テンプレート1件が`IsDefaultForStage=true` | その1件を含むリスト（1件） |
+| 5 | 異なるStageに`IsDefaultForStage=true`のテンプレートが存在 | 空リスト（Stage不一致のため対象外） |
+| 6 | 同一Stageに他テンプレートが複数あるが全て`IsDefaultForStage=false` | 空リスト（降格対象なし、`false`のテンプレートは元々対象外） |
+| 7 | 同一Stageに（データ不整合により）`IsDefaultForStage=true`が2件以上存在（candidate以外） | 該当する全件（2件以上） |
 
 **呼び出し元（COMP-11、副作用担当）との関係**: COMP-11のテンプレートPOST/PUTハンドラは、①リクエストDTOからcandidateを構築→②`GetAllAsync()`で全件取得→③`ResolveDemotions(allTemplates, candidate)`を呼ぶ→④返ってきた降格対象それぞれの`IsDefaultForStage`を`false`にして保存→⑤candidate自身を保存、という手順を踏むだけであり（component_design.md 159〜165行目のフロー図のとおり）、一意性の判定ロジック自体はハンドラ側に一切持たない。この呼び出し手順自体はcomponent_design.md側で確定済みのため、本関数設計工程では変更しない。
 
