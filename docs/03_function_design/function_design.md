@@ -713,8 +713,9 @@ private static string ResolveWithinRoot(string rootPath, string relativePath)
 
 **事前条件**:
 
-- `targetPath`: `Issue.TargetProjectPath`相当の文字列。null不可（呼び出し元がnullを渡す経路はない。空文字列は許容し、`Path.GetFullPath("")`は例外を投げずプロセスのカレントディレクトリを返す。この場合の扱いは下記境界値#8参照）。
-- `allowedRoots`: `appsettings.json`の`Security:AllowedProjectRoots`から読み出された値（COMP-04 2.4節）。null不可（呼び出し元は空配列`[]`を既定値として渡す）。要素が絶対パスであることを前提とするが、本関数自体は相対パス文字列が混入していても例外を投げない（`Path.GetFullPath`が呼び出し元プロセスのカレントディレクトリを基準に解決するため。運用者の設定ミスに対する追加の入力検証は行わない）。
+- `targetPath`: `Issue.TargetProjectPath`相当の文字列。null不可（呼び出し元がnullを渡す経路はない）。空文字列・ホワイトスペースのみの文字列・不正な文字を含む文字列の場合、`Path.GetFullPath`が`ArgumentException`を送出する（例外を投げずプロセスのカレントディレクトリを返すわけではない）。本関数はこれを捕捉しない（呼び出し元がこの例外を処理する前提とする）。この場合の扱いは下記境界値#11参照。
+- `allowedRoots`: `appsettings.json`の`Security:AllowedProjectRoots`から読み出された値（COMP-04 2.4節）。null不可（呼び出し元は空配列`[]`を既定値として渡す）。要素が絶対パスであることを前提とするが、本関数自体は相対パス文字列が混入していても例外を投げない（`Path.GetFullPath`が呼び出し元プロセスのカレントディレクトリを基準に解決するため。運用者の設定ミスに対する追加の入力検証は行わない）。ただし要素が空文字列・ホワイトスペースのみ・不正な文字を含む文字列の場合は、`targetPath`と同様にループ内の`Path.GetFullPath(root)`で`ArgumentException`を送出する。
+- **例外契約（まとめ）**: 本関数は`targetPath`・`allowedRoots`の要素が不正な文字列（空文字列・ホワイトスペースのみ・Windowsで使用できない文字を含む場合等）であった場合に`Path.GetFullPath`由来の`ArgumentException`を送出しうる。本関数自身はこれを捕捉・変換しないため、呼び出し元（COMP-11）が例外処理の要否を実装工程で判断する。
 
 **判定ロジック（正規化・比較）**:
 
@@ -765,7 +766,7 @@ public static bool IsWithinAllowedRoots(string targetPath, IReadOnlyList<string>
 | 8 | `["C:\Projects"]` | `C:\Projects\sub\..`（配下から`..`で許可ルート自身へ戻る表記） | `Path.GetFullPath`が`C:\Projects`に正規化し、`Equals`分岐で一致 | `true` |
 | 9 | `["C:\Projects", "D:\Work"]`（複数ルート） | `D:\Work\foo` | 1件目`Equals`/`StartsWith`とも不一致→2件目で`StartsWith`一致 | `true` |
 | 10 | `["\\\\server\\share"]`（UNCパス） | `\\server\share\foo` | UNCパスも`Path.GetFullPath`・`StartsWith`の対象として同様に扱える（SMB共有も大文字小文字非区別のため`OrdinalIgnoreCase`と整合） | `true` |
-| 11 | `["C:\Projects"]` | `""`（空文字列、境界値） | `Path.GetFullPath("")`はプロセスのカレントディレクトリを返す。通常`C:\Projects`配下と一致しないため`false`になるが、判定結果はプロセスの起動条件に依存する（上記「相対パスの`targetPath`が渡された場合の限界」参照） | 通常`false`（環境依存） |
+| 11 | `["C:\Projects"]` | `""`（空文字列、境界値） | `Path.GetFullPath("")`は`ArgumentException`を送出する（`false`は返らない）。本関数はこれを捕捉しないため、呼び出し元に例外が伝播する | 例外（`ArgumentException`） |
 
 #### 2.7.3 `IsAllowed(string targetPath)`
 
