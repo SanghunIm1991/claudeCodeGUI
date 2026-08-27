@@ -584,7 +584,7 @@ public static class MockRunGenerator
 - `configMockMode`: `appsettings.json`の`ClaudeCli:MockMode`から読み出された値（COMP-04 2.4節）。制約なし（`true`/`false`いずれも許容）。
 - `cliPath`: `ClaudeRunEngine`が保持する`_claudeCliPath`（`appsettings.json`の`ClaudeCli:Path` ?? `"claude"`）。本関数自体はnull/空文字列も許容し例外を投げない（下記境界値#4・#8参照）。
 
-**判定に用いるAPIの候補と選定**: 「`cliPath`が絶対パスかどうか」の判定には`System.IO.Path.IsPathRooted(string?)`を用いる（`null`・空文字列を渡しても例外を投げず`false`を返す、.NET標準の仕様）。代替候補として`Path.IsPathFullyQualified`も検討したが、こちらはWindows上でドライブレター必須などより厳密な判定になり、`"claude"`のようなコマンド名指定と絶対パス指定を区別するという本関数の目的に対しては`Path.IsPathRooted`で十分かつ既存実装（`ClaudeRunEngine`コンストラクタの`_claudeCliPath`既定値`"claude"`）との整合が取りやすいため、`Path.IsPathRooted`を採用する。
+**判定に用いるAPIの候補と選定**: 「`cliPath`が絶対パスかどうか」の判定には`System.IO.Path.IsPathRooted(string?)`を用いる（`null`・空文字列を渡しても例外を投げず`false`を返す、.NET標準の仕様）。代替候補として`Path.IsPathFullyQualified`も検討したが、こちらはWindows上でドライブレター必須などより厳密な判定になる。`"claude"`のようなコマンド名指定と絶対パス指定を区別するという本関数の目的に対しては`Path.IsPathRooted`で十分であり、既存実装（`ClaudeRunEngine`コンストラクタの`_claudeCliPath`既定値`"claude"`）との整合も取りやすいため、`Path.IsPathRooted`を採用する。
 
 **事後条件・戻り値の意味**:
 
@@ -592,7 +592,22 @@ public static class MockRunGenerator
 - `configMockMode == false`の場合のみ、`cliPath`の実行可否判定に進む。
   - `Path.IsPathRooted(cliPath) == true`（絶対パス指定）かつ`File.Exists(cliPath) == false`（ファイル不在）の場合のみ`true`（自動フォールバック、REQ-01後段）。
   - `Path.IsPathRooted(cliPath) == true`かつ`File.Exists(cliPath) == true`の場合は`false`（実CLIをそのまま使用）。
-  - `Path.IsPathRooted(cliPath) == false`（コマンド名指定など、PATH解決に依存する形）の場合は`File.Exists`による判定を行わず、常に`false`を返す。component_design.md注記のとおり、PATH解決に依存するコマンド名指定は`File.Exists`では実行可否を判定できないため対象外とする制約であり、この場合の実行可否の最終判断は`ExecuteAsync`側の実プロセス起動失敗時の`catch`節（2.5.2節、既存の例外処理経路）に委ねる。
+  - `Path.IsPathRooted(cliPath) == false`（コマンド名指定など、PATH解決に依存する形）の場合は`File.Exists`による判定を行わず、常に`false`を返す。これは、PATH解決に依存するコマンド名指定は`File.Exists`では実行可否を判定できないため対象外とする、という制約による（component_design.md注記のとおり）。この場合の実行可否の最終判断は、`ExecuteAsync`側の実プロセス起動失敗時の`catch`節（2.5.2節、既存の例外処理経路）に委ねる。
+
+##### `ShouldUseMock`の判定フロー（補足図）
+
+上記の事後条件（`configMockMode`優先→絶対パス判定→ファイル存在確認、の順に評価する分岐構造）をフローチャートで整理すると以下のとおり。各終端の分岐条件・戻り値は、後述の真理値表（境界値・分岐条件）の該当パターンと対応している。
+
+```mermaid
+flowchart TD
+    Start(["ShouldUseMock(configMockMode, cliPath)"]) --> Cfg{"configMockMode"}
+    Cfg -->|true| True1["true を返す\n（設定値が最優先。#1〜#4）"]
+    Cfg -->|false| Rooted{"Path.IsPathRooted(cliPath)"}
+    Rooted -->|false（コマンド名指定・null・空文字列 等）| False1["false を返す\n（File.Existsでは判定不可のため対象外。#7・#8）"]
+    Rooted -->|true（絶対パス指定）| Exists{"File.Exists(cliPath)"}
+    Exists -->|true（実在）| False2["false を返す\n（実CLIをそのまま使用。#5）"]
+    Exists -->|false（不在）| True2["true を返す\n（自動フォールバック。#6）"]
+```
 
 **参考実装（アルゴリズム）**:
 
