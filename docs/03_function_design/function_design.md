@@ -369,8 +369,8 @@ public async Task<RunStartResult> StartAsync(
 | 入力 | 上記1〜3の分岐条件（`winningRunId == run.Id`）が成立した状態 |
 | 出力（対象ディレクトリ存在時） | `RunStartResult(run, null)`。`run`は`Status="running"`のまま（`ApplyResult`未実行、`ExecuteAsync`完了まで確定しない） |
 | 出力（対象ディレクトリ不在時、境界値） | `RunStartResult(run, null)`。`run`は`Status="failed"`, `IsError=true`, `ResultSummary=$"対象ディレクトリが存在しません: {issue.TargetProjectPath}"`, `FinishedAt`設定済み（既存実装のメッセージ文言を維持）。**`ConflictingRunId`は`null`**（排他拒否とは無関係の失敗理由のため。REQ-12の`ConflictingRunId`は同時実行拒否時専用） |
-| 副作用（共通） | `run`を`_runStore.SaveAsync`で保存 |
-| 副作用（対象ディレクトリ存在時のみ） | `MockRunGenerator.ShouldUseMock(configMockMode, _claudeCliPath)`（COMP-06）を呼び`run.IsMock`へ設定、`run.TriggeredByLoop = triggeredByLoop`を設定して再保存 → `RetentionPruner.PruneAsync(...)`（COMP-09）を呼び出す → `_active[run.Id] = new RunContext(LogPathFor(run.Id))`へ登録 → `_ = Task.Run(() => ExecuteAsync(run, issue, prompt, permissionMode, ctx, run.IsMock))`でバックグラウンド起動 → 呼び出し成功直後に`backgroundStarted = true` |
+| 副作用（対象ディレクトリ不在時） | `run`を`_runStore.SaveAsync`で保存（1回のみ） |
+| 副作用（対象ディレクトリ存在時） | `MockRunGenerator.ShouldUseMock(configMockMode, _claudeCliPath)`（COMP-06）を呼び`run.IsMock`へ設定、`run.TriggeredByLoop = triggeredByLoop`を設定 → その状態の`run`を`_runStore.SaveAsync`で保存（1回のみ。component_design.md 232行目・本設計書2.2節「`IsMock`」行の「Run生成後・保存前に設定」と整合させ、`IsMock`/`TriggeredByLoop`未設定のまま`run`が永続化される中間状態を作らない）→ `RetentionPruner.PruneAsync(...)`（COMP-09）を呼び出す → `_active[run.Id] = new RunContext(LogPathFor(run.Id))`へ登録 → `_ = Task.Run(() => ExecuteAsync(run, issue, prompt, permissionMode, ctx, run.IsMock))`でバックグラウンド起動 → 呼び出し成功直後に`backgroundStarted = true` |
 | ロック解放（`_activeIssueRuns`） | `backgroundStarted`が`true`になった場合は`ExecuteAsync`側の`finally`（2.5.3節）が解放を担当し、本メソッドの`finally`では何もしない。対象ディレクトリ不在等`backgroundStarted`到達前に早期returnした場合は、本メソッドの`finally`で`_activeIssueRuns.TryRemove(issue.Id, out _)`を実行する（component_design.md「ロック解放の設計方針」節参照。個別分岐ごとの解放コード追加は不要） |
 
 **境界値・分岐条件**（テストケース設計への転用を想定）:
