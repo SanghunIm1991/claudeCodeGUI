@@ -603,10 +603,10 @@ flowchart TD
     Start(["ShouldUseMock(configMockMode, cliPath)"]) --> Cfg{"configMockMode"}
     Cfg -->|true| True1["true を返す\n（設定値が最優先。#1〜#4）"]
     Cfg -->|false| Rooted{"Path.IsPathRooted(cliPath)"}
-    Rooted -->|false（コマンド名指定・null・空文字列 等）| False1["false を返す\n（File.Existsでは判定不可のため対象外。#7・#8）"]
-    Rooted -->|true（絶対パス指定）| Exists{"File.Exists(cliPath)"}
-    Exists -->|true（実在）| False2["false を返す\n（実CLIをそのまま使用。#5）"]
-    Exists -->|false（不在）| True2["true を返す\n（自動フォールバック。#6）"]
+    Rooted -->|false| False1["false を返す\nコマンド名指定・null・空文字列等の場合\n（File.Existsでは判定不可のため対象外。#7・#8）"]
+    Rooted -->|true| Exists{"File.Exists(cliPath)\n（絶対パス指定）"}
+    Exists -->|true| False2["false を返す\n（実CLIをそのまま使用。#5）"]
+    Exists -->|false| True2["true を返す\n（自動フォールバック。#6）"]
 ```
 
 **参考実装（アルゴリズム）**:
