@@ -61,7 +61,7 @@
 | COMP-04 appsettings.json 拡張 | (関数なし。設定値の読み取りはCOMP-05/COMP-06/COMP-07の関数設計側で規定。関数設計書2.4節参照) |
 | COMP-05 ClaudeRunEngine 拡張 | `StartAsync`（シグネチャ変更）, `ExecuteAsync`（`isMock`引数追加・既存メソッドの変更）, `CancelAsync`（既存メソッドの変更）, `RunContext.IsCanceled`（既存ネスト型へのフィールド追加、独立関数なし）, `RunCompleted`イベント（新規） |
 | COMP-06 MockRunGenerator（新規） | `ShouldUseMock`（新規・純粋関数）, `GenerateLines`（新規・純粋関数） |
-| COMP-07 TargetPathValidator（新規） | |
+| COMP-07 TargetPathValidator（新規） | `IsWithinAllowedRoots`（新規・純粋関数）, `IsAllowed`（新規・薄いラッパー） |
 | COMP-08 LoopEngine（新規） | |
 | COMP-09 RetentionPruner（新規） | |
 | COMP-10 OrphanSweepService（新規） | |
