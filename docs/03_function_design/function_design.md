@@ -2574,12 +2574,16 @@ async function startRun(issueId) {
 }
 
 // 入力: err（api()が投げた拡張Error、status/bodyプロパティ付き）, issueId
-// 出力: なし（副作用としてconfirm表示・cancel POST・DOM状態復帰）
+// 出力: なし（副作用としてconfirm表示・cancel POST・DOM状態復帰。cancel POST自体が失敗した場合も例外を再送出しない設計、後述）
 async function handleStartRunError(err, issueId) {
   const conflictingRunId = err.status === 409 ? err.body?.conflictingRunId : undefined;
   if (conflictingRunId && confirm("このIssueは実行中です。中止しますか？")) {
     try {
       await api(`/api/runs/${conflictingRunId}/cancel`, { method: "POST" });
+    } catch (cancelErr) {
+      // cancel POST自体の失敗はここで握りつぶし、呼び出し元（startRun）へは伝播させない設計判断（後述）。
+      // ボタン復帰・一覧再取得は下のfinallyでfinishRunが継続して行うため、ここでは診断用ログのみ残す。
+      console.error("中止対象Runの中止処理（cancel POST）に失敗しました:", cancelErr);
     } finally {
       await finishRun(issueId);   // 既存関数を再利用：ボタン再有効化・Run一覧再取得・Issue一覧再読込
     }
@@ -2593,6 +2597,12 @@ async function handleStartRunError(err, issueId) {
   document.getElementById("run-cancel").disabled = true;
 }
 ```
+
+**cancel POST失敗時に例外を呼び出し元へ再送出しない設計判断（レビュー指摘対応）**: JavaScriptの`try { ... } finally { ... }`（`catch`節なし）は、`finally`ブロックの実行後に元の例外を必ず再送出する仕様である。当初案はこの構造のまま`finally`のみで`await api(cancel)`を囲んでいたため、cancel POSTが失敗すると`finishRun`の成否に関わらず`handleStartRunError`自身が必ず例外を再送出（reject）してしまい、その伝播先である`startRun`側の`catch (err) { await handleStartRunError(err, issueId); return; }`（2569〜2572行目）にはこれを受け止める`try/catch`が存在しないため、`startRun`自身の戻り値Promiseが未処理rejection（unhandled rejection）になる帰結を招いていた。この対応として、cancel POST呼び出しを`try/catch(cancelErr)/finally`に変更し、cancel POST自体の失敗は`catch (cancelErr)`でこの関数内に留め、`console.error`で診断ログのみ残して外へは伝播させない方針（本節冒頭の選択肢(a)）を採る。理由は以下の2点:
+- 直上のコメント「出力: なし（副作用のみ）」というこの関数の既存の契約と整合する。呼び出し元`startRun`に手を加える方針（選択肢(b)、`startRun`側に`try/catch`を追加してunhandled rejectionを防ぐ）も可能だが、`startRun`は2.12.3節が確定済みの構成であり、本節（COMP-13）の対応範囲をこの関数内に閉じることができる(a)の方が変更範囲が小さい。
+- ボタン復帰・Run一覧再取得は`finally`内の`finishRun(issueId)`呼び出しにより、cancel POSTの成否と無関係に継続される（COMP-12申し送りバグの再発防止という本節の主目的は変わらず達成される）。cancel POST失敗は「対象Runが直前に既に終了していた」等の非致命的なケースが主であり、ユーザーへは`confirm`で表示した中止の意図に対する結果を再度知らせる追加UIまでは要求されていない（component_design.mdは`confirm`→中止POSTへの誘導のみを規定）。
+
+この修正により、`finally`内`finishRun(issueId)`自身が投げる例外（`finishRun`内部の`api(...)`によるRun一覧取得の失敗）のみが、`handleStartRunError`の外（`startRun`側の未処理rejection）へ伝播しうる唯一の残存リスクとなる（2.13.2節境界値表#6参照。`finishRun`自体の防御は2.12節の対象外であり本節でも変更しない）。
 
 **宣言位置**: `handleStartRunError`は`finishRun`（232〜239行目）の直後、`startRun`（175行目、2.12.3節によるリファクタリング後は`connectRunStream`定義以降）の直前に配置する想定。`startRun`が呼び出す前方参照になるが、`function`宣言（巻き上げ）のため呼び出し順に問題はない。
 
@@ -2611,11 +2621,11 @@ async function handleStartRunError(err, issueId) {
 | 3 | `409` | `null`または`conflictingRunId`欠落（境界値、2.13.1節境界値#2に相当するcontract違反ケース） | - | `confirm`は表示せず、ボタンのみ復帰する分岐へ落ちる |
 | 4 | `409`以外（例: `404`「Issueが見つかりません」、`500`等） | - | - | `confirm`は表示せず、ボタンのみ復帰する |
 | 5 | `undefined`（`fetch`自体が例外を投げた場合、2.13.1節境界値#6） | `undefined` | - | `err.status === 409`が`false`となり#4と同じ分岐（ボタンのみ復帰）。`TypeError`にも`status`プロパティが存在しないため安全に`undefined`として扱われる |
-| 6 | `409` | `{conflictingRunId: "r-1", ...}` | 同意（OK）だが`POST /api/runs/r-1/cancel`自体が例外を投げる（境界値、対象Runが直前に既に終了していた等） | `finally`により`finishRun(issueId)`は実行されボタンは復帰する（COMP-12申し送りバグの再発防止）。ただし`finishRun`内部の`api(...)`（Run一覧取得）が同様に例外を投げた場合はその例外が`handleStartRunError`の外へ伝播しうる残存リスクとして記録するに留める（`finishRun`自体の防御は2.12節の対象外であり本節では変更しない） |
+| 6 | `409` | `{conflictingRunId: "r-1", ...}` | 同意（OK）だが`POST /api/runs/r-1/cancel`自体が例外を投げる（境界値、対象Runが直前に既に終了していた等） | `catch (cancelErr)`で捕捉し`console.error`で診断ログのみ残す（呼び出し元`startRun`へは再送出しない）。その後`finally`により`finishRun(issueId)`が実行されボタンは復帰する（COMP-12申し送りバグの再発防止）。`handleStartRunError`はこのケースで例外を投げず正常終了する。ただし`finishRun`自身の内部（`api(...)`によるRun一覧取得）が別途例外を投げた場合は、それが`handleStartRunError`の外（`startRun`側の未処理rejection）へ伝播しうる唯一の残存リスクである（`finishRun`自体の防御は2.12節の対象外であり本節では変更しない。cancel POSTの成否とは独立したケース） |
 
 #### 2.13.3 既存の`api()`呼び出し元への互換性影響
 
-`app.js`内で`api()`を呼び出す全箇所（`loadIssues`・`selectIssue`・`issue-edit-form`submit・`startRun`・`cancelRun`・`loadArtifactDir`・`loadArtifactFile`・`saveArtifact`・`issue-form`submit・`loadTemplates`・`selectTemplate`・`template-edit-form`submit・`te-delete`・`template-form`submit）を確認した。
+`app.js`内で`api()`を呼び出す全箇所（`loadIssues`・`selectIssue`・`issue-edit-form`submit・`startRun`・`finishRun`・`cancelRun`・`loadArtifactDir`・`loadArtifactFile`・`saveArtifact`・`issue-form`submit・`loadTemplates`・`selectTemplate`・`template-edit-form`submit・`te-delete`・`template-form`submit）を確認した。
 
 - **`loadArtifactFile`（277〜286行目）**: 唯一`try/catch`で`api()`の例外を捕捉し、`` `読み込みに失敗しました（バイナリファイルの可能性があります）: ${e.message}` ``という形で`e.message`をユーザーに表示している。2.13.1節の設計判断（`err.message`の書式を変更しない）により、この表示文言は変更されない。新規追加された`status`/`body`プロパティは未使用のまま無視されるだけで、追加の互換性影響はない。
 - **上記以外の全箇所**: いずれも`api()`の例外を`catch`していない（未処理のまま呼び出し元関数のPromiseがrejectされ、ブラウザのコンソールにエラーとして表れる既存の挙動）。`Error`のサブクラス化ではなくプロパティの追加代入のみであるため、`instanceof Error`判定・未捕捉時の挙動（ブラウザのデフォルトのunhandled rejection処理）に変化はない。
