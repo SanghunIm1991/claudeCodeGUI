@@ -2531,6 +2531,26 @@ async function api(path, options) {
 
 **`res.text()`が空文字列の場合にJSON.parseを呼ばない理由**: `JSON.parse("")`は`SyntaxError`を送出するため`try/catch`で捕捉自体は可能だが、空ボディ応答（例: 一部のミドルウェアが返す本文なしの`4xx`/`5xx`）は「JSONとして無効」というより「そもそも中身がない」ケースであり、`if (text)`で先に弾いておくことで意図を明確にする（挙動としてはどちらも`parsedBody = null`になり同じ）。
 
+##### `api()`エラー処理のフロー（補足図）
+
+```mermaid
+flowchart TD
+    Start(["api(path, options)"]) --> Fetch["fetch(path, {...options})"]
+    Fetch --> Ok{"res.ok?"}
+    Ok -->|Yes| Status204{"res.status === 204?"}
+    Status204 -->|Yes| ReturnNull["return null"]
+    Status204 -->|No| ReturnJson["return res.json()"]
+    Ok -->|No| GetText["text = await res.text()"]
+    GetText --> HasText{"text が非空?"}
+    HasText -->|No| ParsedNull["parsedBody = null"]
+    HasText -->|Yes| TryParse["try: parsedBody = JSON.parse(text)"]
+    TryParse --> ParseOk{"パース成功?"}
+    ParseOk -->|Yes| BuildErr
+    ParseOk -->|No| ParsedNull2["catch: parsedBody = null"] --> BuildErr
+    ParsedNull --> BuildErr["err = new Error(`${res.status}: ${text}`)\nerr.status = res.status\nerr.body = parsedBody"]
+    BuildErr --> Throw(["throw err"])
+```
+
 **代表的な境界値・分岐条件**:
 
 | # | 応答 | `text` | `parsedBody` | 備考 |
@@ -2598,7 +2618,11 @@ async function handleStartRunError(err, issueId) {
 }
 ```
 
-**cancel POST失敗時に例外を呼び出し元へ再送出しない設計判断（レビュー指摘対応）**: JavaScriptの`try { ... } finally { ... }`（`catch`節なし）は、`finally`ブロックの実行後に元の例外を必ず再送出する仕様である。当初案はこの構造のまま`finally`のみで`await api(cancel)`を囲んでいたため、cancel POSTが失敗すると`finishRun`の成否に関わらず`handleStartRunError`自身が必ず例外を再送出（reject）してしまい、その伝播先である`startRun`側の`catch (err) { await handleStartRunError(err, issueId); return; }`（2569〜2572行目）にはこれを受け止める`try/catch`が存在しないため、`startRun`自身の戻り値Promiseが未処理rejection（unhandled rejection）になる帰結を招いていた。この対応として、cancel POST呼び出しを`try/catch(cancelErr)/finally`に変更し、cancel POST自体の失敗は`catch (cancelErr)`でこの関数内に留め、`console.error`で診断ログのみ残して外へは伝播させない方針（本節冒頭の選択肢(a)）を採る。理由は以下の2点:
+**cancel POST失敗時に例外を呼び出し元へ再送出しない設計判断（レビュー指摘対応）**: JavaScriptの`try { ... } finally { ... }`（`catch`節なし）は、`finally`ブロックの実行後に元の例外を必ず再送出する仕様である。
+
+当初案はこの構造のまま`finally`のみで`await api(cancel)`を囲んでいたため、cancel POSTが失敗すると`finishRun`の成否に関わらず`handleStartRunError`自身が必ず例外を再送出（reject）してしまい、その伝播先である`startRun`側の`catch (err) { await handleStartRunError(err, issueId); return; }`（2569〜2572行目）にはこれを受け止める`try/catch`が存在しないため、`startRun`自身の戻り値Promiseが未処理rejection（unhandled rejection）になる帰結を招いていた。
+
+この対応として、cancel POST呼び出しを`try/catch(cancelErr)/finally`に変更し、cancel POST自体の失敗は`catch (cancelErr)`でこの関数内に留め、`console.error`で診断ログのみ残して外へは伝播させない方針（本節冒頭の選択肢(a)）を採る。理由は以下の2点:
 - 直上のコメント「出力: なし（副作用のみ）」というこの関数の既存の契約と整合する。呼び出し元`startRun`に手を加える方針（選択肢(b)、`startRun`側に`try/catch`を追加してunhandled rejectionを防ぐ）も可能だが、`startRun`は2.12.3節が確定済みの構成であり、本節（COMP-13）の対応範囲をこの関数内に閉じることができる(a)の方が変更範囲が小さい。
 - ボタン復帰・Run一覧再取得は`finally`内の`finishRun(issueId)`呼び出しにより、cancel POSTの成否と無関係に継続される（COMP-12申し送りバグの再発防止という本節の主目的は変わらず達成される）。cancel POST失敗は「対象Runが直前に既に終了していた」等の非致命的なケースが主であり、ユーザーへは`confirm`で表示した中止の意図に対する結果を再度知らせる追加UIまでは要求されていない（component_design.mdは`confirm`→中止POSTへの誘導のみを規定）。
 
@@ -2611,6 +2635,26 @@ async function handleStartRunError(err, issueId) {
 **この経路で`currentRunId`が`null`のままである理由**: `currentRunId`は`connectRunStream`内部（2.12.1節手順3）でのみ`runId`に更新される。本経路は`POST`が失敗し`connectRunStream`に到達しない場合のみ通るため、`startRun`呼び出し時点で既に実行中の別Runを`currentRunId`が指していない限り（＝通常は`null`のまま）である。したがって`cancelRun`（既存、241〜244行目）がこの`conflictingRunId`を誤って対象にすることはない。
 
 **同意後の自動再試行を行わない設計判断**: `conflictingRunId`の中止に成功しても、ユーザーが当初意図した新規Run開始を自動的に再実行することはしない。component_design.mdの確定仕様は「中止操作へ誘導する」（REQ-13）に留まり自動再試行を要求していないため、ユーザーが改めて「実行」ボタンを押す操作を要求する設計とする。
+
+##### `startRun`の`catch`処理と`handleStartRunError`の分岐フロー（補足図）
+
+```mermaid
+flowchart TD
+    Start(["startRun: POST /api/issues/{issueId}/runs"]) --> PostResult{"POST成功?"}
+    PostResult -->|Yes| ConnectStream["connectRunStream(issueId, run.id)"]
+    PostResult -->|No（例外throw）| Handle["handleStartRunError(err, issueId) を呼ぶ"]
+    Handle --> Is409{"err.status === 409?"}
+    Is409 -->|No| ResetButtons["run-start=enabled\nrun-cancel=disabled\n（Run一覧再取得は行わない）"]
+    Is409 -->|Yes| HasConflictId{"err.body?.conflictingRunId\nが存在する?"}
+    HasConflictId -->|No| ResetButtons
+    HasConflictId -->|Yes| Confirm{"confirm(&quot;このIssueは実行中です。中止しますか？&quot;)\nで同意?"}
+    Confirm -->|No（拒否）| ResetButtons
+    Confirm -->|Yes（OK）| CancelPost["try: POST /api/runs/{conflictingRunId}/cancel"]
+    CancelPost --> CancelResult{"cancel POST\nは成功したか?"}
+    CancelResult -->|失敗| LogError["catch: console.error(診断ログのみ、再送出しない)"]
+    CancelResult -->|成功| FinishRun
+    LogError --> FinishRun["finally: finishRun(issueId)\n（ボタン再有効化・Run一覧/Issue一覧再取得）"]
+```
 
 **代表的な境界値・分岐条件**:
 
@@ -2627,11 +2671,15 @@ async function handleStartRunError(err, issueId) {
 
 `app.js`内で`api()`を呼び出す全箇所（`loadIssues`・`selectIssue`・`issue-edit-form`submit・`startRun`・`finishRun`・`cancelRun`・`loadArtifactDir`・`loadArtifactFile`・`saveArtifact`・`issue-form`submit・`loadTemplates`・`selectTemplate`・`template-edit-form`submit・`te-delete`・`template-form`submit）を確認した。
 
-- **`loadArtifactFile`（277〜286行目）**: 唯一`try/catch`で`api()`の例外を捕捉し、`` `読み込みに失敗しました（バイナリファイルの可能性があります）: ${e.message}` ``という形で`e.message`をユーザーに表示している。2.13.1節の設計判断（`err.message`の書式を変更しない）により、この表示文言は変更されない。新規追加された`status`/`body`プロパティは未使用のまま無視されるだけで、追加の互換性影響はない。
-- **上記以外の全箇所**: いずれも`api()`の例外を`catch`していない（未処理のまま呼び出し元関数のPromiseがrejectされ、ブラウザのコンソールにエラーとして表れる既存の挙動）。`Error`のサブクラス化ではなくプロパティの追加代入のみであるため、`instanceof Error`判定・未捕捉時の挙動（ブラウザのデフォルトのunhandled rejection処理）に変化はない。
+| 呼び出し箇所 | `catch`での例外捕捉 | 挙動・互換性影響 |
+|---|---|---|
+| `loadArtifactFile`（277〜286行目） | あり（唯一） | `` `読み込みに失敗しました（バイナリファイルの可能性があります）: ${e.message}` ``という形で`e.message`をユーザーに表示している。2.13.1節の設計判断（`err.message`の書式を変更しない）により、この表示文言は変更されない。新規追加された`status`/`body`プロパティは未使用のまま無視されるだけで、追加の互換性影響はない |
+| 上記以外の全箇所（`loadIssues`・`selectIssue`・`issue-edit-form`submit・`startRun`・`finishRun`・`cancelRun`・`loadArtifactDir`・`saveArtifact`・`issue-form`submit・`loadTemplates`・`selectTemplate`・`template-edit-form`submit・`te-delete`・`template-form`submit） | なし | `api()`の例外は未処理のまま呼び出し元関数のPromiseがrejectされ、ブラウザのコンソールにエラーとして表れる既存の挙動のまま変化しない。`Error`のサブクラス化ではなくプロパティの追加代入のみであるため、`instanceof Error`判定・未捕捉時の挙動（ブラウザのデフォルトのunhandled rejection処理）にも変化はない |
 
 #### 2.13.4 COMP-14（`startLoop`）との依存関係について
 
-component_design.md（665行目）は「`startRun`（およびCOMP-14の`startLoop`）はこの構造化エラーを`catch`し」と規定しており、2.13.1節の`api()`拡張はCOMP-14の`startLoop`からも共通で利用される前提である。ただし`startLoop`固有の分岐（`400 Bad Request`時の`err.body.error`を`alert`表示する処理、component_design.md 673行目）は本節の対象外であり、COMP-14自身の関数設計工程で設計する。本節が提供するのは、COMP-14が再利用できる拡張済み`api()`ヘルパー（2.13.1節）と、409時の確認ダイアログ〜中止誘導という参考実装（`handleStartRunError`、2.13.2節）の存在のみである。`startLoop`が`handleStartRunError`をそのまま呼び出す設計にするか、同等のロジックを`startLoop`側に個別実装するかはCOMP-14側の裁量とし、本節では規定しない。
+component_design.md（665行目）は「`startRun`（およびCOMP-14の`startLoop`）はこの構造化エラーを`catch`し」と規定しており、2.13.1節の`api()`拡張はCOMP-14の`startLoop`からも共通で利用される前提である。ただし`startLoop`固有の分岐（`400 Bad Request`時の`err.body.error`を`alert`表示する処理、component_design.md 673行目）は本節の対象外であり、COMP-14自身の関数設計工程で設計する。
+
+本節が提供するのは、COMP-14が再利用できる拡張済み`api()`ヘルパー（2.13.1節）と、409時の確認ダイアログ〜中止誘導という参考実装（`handleStartRunError`、2.13.2節）の存在のみである。`startLoop`が`handleStartRunError`をそのまま呼び出す設計にするか、同等のロジックを`startLoop`側に個別実装するかはCOMP-14側の裁量とし、本節では規定しない。
 
 対応ID: REQ-13, CON-06
