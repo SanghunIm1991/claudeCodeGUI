@@ -2693,7 +2693,7 @@ component_design.md（665行目）は「`startRun`（およびCOMP-14の`startLo
 **事前条件**:
 
 - `renderIssueDetail`（既存、70〜156行目）がIssue詳細画面のHTMLを`innerHTML`で構築済みであり、`#issue-edit-form`（82〜95行目）・`.run-controls`（97〜108行目、`run-start`/`run-cancel`を含む）が生成済みであること。本節はこの構造に要素を追加するのみで、CON-02が禁じる画面構造（縦一列配置）自体の変更は行わない。
-- COMP-13（2.13節）が確定済みの`api()`拡張（`err.status`/`err.body`プロパティ付き例外、2.13.1節）が実装済みであること。本節はこれを変更せずそのまま再利用する（`handleStartRunError`自体は本節では再利用しない。理由は2.14.2節「409の扱い」参照。COMP-13ラウンド1レビュー指摘への対応）。
+- COMP-13（2.13節）が確定済みの`api()`拡張（`err.status`/`err.body`プロパティ付き例外、2.13.1節）が実装済みであること。本節はこれを変更せずそのまま再利用する（`handleStartRunError`自体は本節では再利用しない。理由は2.14.2節「409の扱い」参照。COMP-14ラウンド1レビュー指摘への対応）。
 - COMP-12（2.12.1節）が確定済みの`finishRun`（既存、232〜239行目）が実装済みであること。本節も他コンポーネント同様、これを変更せずそのまま再利用する。
 - COMP-11（2.11.5節・2.11.9節）が確定済みの`PUT /api/issues/{id}`ハンドラ（`UpdateIssueRequest`が`LoopEnabled`・`DefaultPermissionMode`を含む）・`POST /api/issues/{issueId}/loop/start`ハンドラ（成功時`202 Accepted`/`409 Conflict`、失敗時`400 Bad Request`、2.11.9節境界値表参照）が実装済みであること。
 - COMP-01（2.1節）が確定済みの`Issue`追加プロパティ（`LoopEnabled`・`DefaultPermissionMode`・`LoopConsecutiveRunCount`・`LoopStopReason`）が、`GET /api/issues`・`GET /api/issues/{id}`のレスポンスにcamelCaseで含まれること。既存`Program.cs`（30〜34行目）はいずれも`Issue`オブジェクトをそのまま`Results.Ok`で返す実装であり、DTOによる投影を行っていないため、モデル側へのプロパティ追加のみで自動的にレスポンスへ反映される（本節側で追加のシリアライズ対応は不要）。
@@ -2854,6 +2854,8 @@ async function handleStartLoopConflictError(err, issueId) {
 **宣言位置**: `handleStartLoopConflictError`は`startLoop`の直前、`cancelRun`（既存、241〜244行目）の直後に配置する（`startLoop`と同じRun操作系のヘルパー群）。COMP-13の`handleStartRunError`（2.13節）とは別関数として独立させ、COMP-13側のファイルには追加しない。
 
 **`finishRun`を明示的に呼ぶ設計判断（`handleStartRunError`との差分）**: `handleStartRunError`は`finally`節で無条件に`finishRun`を呼ぶのに対し、本関数は中止POSTが成功した場合のみ`finishRun`を呼ぶ。中止POST失敗時にも呼んでしまうと、手動Runが実際にはまだ稼働中の可能性がある状況でボタンを「未実行」表示に戻してしまい、本節の指摘（ラウンド1）が問題視した「稼働中のRunを中止不能にする」ケースを再現することになるため、あえて非対称にしている。
+
+**中止POSTが成功しても自律ループは自動的には開始されない設計判断**: 中止POSTが成功して`finishRun`が呼ばれても、ユーザーが当初意図した自律ループの開始を自動的に再実行することはしない。component_design.mdの確定仕様は「競合する実行中Runの中止へ誘導する」（REQ-13参照）に留まり自動再試行を要求していないため、ユーザーが改めて「自律ループ開始」ボタンを押す操作を要求する設計とする。
 
 **loop-startボタンの無効化範囲を自身のPOST送信中のみに限定する設計判断**: component_design.mdはloop-startボタンの活性制御を明記していない。ここでは、`loop-start`の`disabled`をPOST送信中（数十〜数百ms程度）のみに限定し、Run/ループが実際に実行されている間は無効化し続けない設計とする。
 
