@@ -1751,9 +1751,13 @@ builder.Services.AddSingleton(sp => new OrphanSweepService(
 | `RetentionPruner` | **登録不要**（下記「確認事項」参照） | 2.9節 |
 | `OrphanSweepService` | ファクトリ経由。コンストラクタ引数`dataRoot`（`string`）はDIで自動解決できない値のため、既存の`dataRoot`変数（`Program.cs` 7行目）を直接渡す。`issueStore`/`runStore`/`logger`は既存登録済みの型から解決する | 2.10.0節（コンストラクタ引数） |
 
-**`RetentionPruner`のDI登録が不要であることの確認（発見した確認事項）**: 2.9節でCOMP-09 `RetentionPruner`は`public static class RetentionPruner`（静的クラス）と確定しており、`PruneAsync(string issueId, JsonFileStore<Run> runStore, string logDir)`も`static`メソッドである。呼び出し元は`ClaudeRunEngine.StartAsync`（COMP-05、2.5.1節手順3）であり、`runStore`・`logDir`はいずれも`ClaudeRunEngine`自身が既に保持している値をそのまま渡す設計のため、`RetentionPruner`自体をDIコンテナへ登録する必要は生じない。component_design.mdの「静的クラス/インスタンスとして必要な形で登録」という記述は、`RetentionPruner`（静的クラス＝登録不要）と`OrphanSweepService`（インスタンス＝登録必要）のそれぞれに応じた扱いを指しており、両者を区別せず一律に`AddSingleton`する必要はないと解釈した。
+**`RetentionPruner`のDI登録が不要であることの確認（発見した確認事項）**: 2.9節でCOMP-09 `RetentionPruner`は`public static class RetentionPruner`（静的クラス）と確定しており、`PruneAsync(string issueId, JsonFileStore<Run> runStore, string logDir)`も`static`メソッドである。呼び出し元は`ClaudeRunEngine.StartAsync`（COMP-05、2.5.1節手順3）であり、`runStore`・`logDir`はいずれも`ClaudeRunEngine`自身が既に保持している値をそのまま渡す設計のため、`RetentionPruner`自体をDIコンテナへ登録する必要は生じない。
 
-**`ClaudeRunEngine`のコンストラクタ変更が不要であることの確認（発見した確認事項）**: component_design.mdは「`ClaudeRunEngine`のコンストラクタに`ClaudeCli:MockMode`設定へのアクセスを追加」と記載しているが、既存コンストラクタは既に`ClaudeRunEngine(IConfiguration config, string dataRoot, JsonFileStore<Run> runStore)`という形で`IConfiguration config`をまるごと受け取っている（`Program.cs` 13〜14行目、2.10.0節でも同一コンストラクタが参照されている）。`ClaudeCli:MockMode`は`IConfiguration`から`config["ClaudeCli:MockMode"]`等で読み取れるため、この`config`引数だけで既に到達可能であり、シグネチャ自体の変更や`Program.cs`側のDI登録変更は不要である。component_design.mdのこの記述は「（既存のconfig引数経由で）アクセスできるようにする」という設計意図の言い換えであり、実装上の追加作業を要求するものではないと判断した。矛盾ではなく確認事項として明記するに留め、component_design.mdの記載自体は変更しない。
+component_design.mdの「静的クラス/インスタンスとして必要な形で登録」という記述は、`RetentionPruner`（静的クラス＝登録不要）と`OrphanSweepService`（インスタンス＝登録必要）のそれぞれに応じた扱いを指しており、両者を区別せず一律に`AddSingleton`する必要はないと解釈した。
+
+**`ClaudeRunEngine`のコンストラクタ変更が不要であることの確認（発見した確認事項）**: component_design.mdは「`ClaudeRunEngine`のコンストラクタに`ClaudeCli:MockMode`設定へのアクセスを追加」と記載しているが、既存コンストラクタは既に`ClaudeRunEngine(IConfiguration config, string dataRoot, JsonFileStore<Run> runStore)`という形で`IConfiguration config`をまるごと受け取っている（`Program.cs` 13〜14行目、2.10.0節でも同一コンストラクタが参照されている）。`ClaudeCli:MockMode`は`IConfiguration`から`config["ClaudeCli:MockMode"]`等で読み取れるため、この`config`引数だけで既に到達可能であり、シグネチャ自体の変更や`Program.cs`側のDI登録変更は不要である。
+
+component_design.mdのこの記述は「（既存のconfig引数経由で）アクセスできるようにする」という設計意図の言い換えであり、実装上の追加作業を要求するものではないと判断した。矛盾ではなく確認事項として明記するに留め、component_design.mdの記載自体は変更しない。
 
 #### 2.11.2 起動時処理の追加
 
@@ -1770,6 +1774,27 @@ using (var scope = app.Services.CreateScope())
 
     await app.Services.GetRequiredService<OrphanSweepService>().SweepAsync();
 }
+```
+
+##### 起動時処理のシーケンス（補足図）
+
+```mermaid
+sequenceDiagram
+    participant P as Program.cs（起動シーケンス）
+    participant TS as TemplateSeeder
+    participant CRE as ClaudeRunEngine
+    participant LE as LoopEngine
+    participant OSS as OrphanSweepService
+
+    P->>TS: await SeedDefaultsAsync(templateStore)
+    TS-->>P: 完了
+
+    P->>CRE: RunCompleted += loopEngine.HandleRunCompletedAsync（購読登録）
+
+    P->>OSS: await SweepAsync()
+    OSS-->>P: 完了
+
+    Note over P: 以降HTTPリクエストの受け付けへ進む
 ```
 
 **手順の順序について**: component_design.mdが指定する順序（①`loopEngine`を`RunCompleted`へ購読登録→②`orphanSweepService.SweepAsync()`）をそのまま踏襲する。①を②より先に行う理由は明記されていないが、`SweepAsync`はストア読み取り・ファイル移動のみで`RunCompleted`イベントを発火させる経路を持たない（2.10節参照）ため、実際にはこの順序を入れ替えても機能上の差異は生じない。本節ではcomponent_design.mdの確定順序をそのまま維持する。
@@ -1905,7 +1930,26 @@ app.MapPut("/api/issues/{id}", async (
 });
 ```
 
-**検証と`404`判定の順序についての設計判断**: component_design.mdはこの順序を規定していないため、本節で以下のとおり確定する。3件のリクエストボディ検証（パス許可・Stage・PermissionMode）を、`store.GetAsync(id)`による`Issue`存在確認より先に行う。理由は、いずれもリクエストボディのみで判定可能でストアI/Oを要さないため、不要なストア読み取りを避けられること、および`POST /api/issues`ハンドラ（ストア書き込み前に検証する構成）との一貫性を保つためである。この順序自体は3件の検証結果を左右しない（`Issue`の存在有無と3検証の合否は独立している）。
+**検証と`404`判定の順序についての設計判断**: component_design.mdはこの順序を規定していないため、本節で以下のとおり確定する。3件のリクエストボディ検証（パス許可・Stage・PermissionMode）を、`store.GetAsync(id)`による`Issue`存在確認より先に行う。
+
+理由は、いずれもリクエストボディのみで判定可能でストアI/Oを要さないため、不要なストア読み取りを避けられること、および`POST /api/issues`ハンドラ（ストア書き込み前に検証する構成）との一貫性を保つためである。この順序自体は3件の検証結果を左右しない（`Issue`の存在有無と3検証の合否は独立している）。
+
+##### 検証順序のフロー（補足図）
+
+```mermaid
+flowchart TD
+    Start(["PUT /api/issues/{id}"]) --> V1{"pathValidator.IsAllowed\n(TargetProjectPath)?"}
+    V1 -->|No| R400a["400 Bad Request\n（許可されていない対象プロジェクトパス）"]
+    V1 -->|Yes| V2{"IssueUpdateValidator\n.IsKnownStage(CurrentStage)?"}
+    V2 -->|No| R400b["400 Bad Request\n（不明な工程）"]
+    V2 -->|Yes| V3{"IssueUpdateValidator\n.IsKnownPermissionMode\n(DefaultPermissionMode)?"}
+    V3 -->|No| R400c["400 Bad Request\n（不明なパーミッションモード）"]
+    V3 -->|Yes| G["store.GetAsync(id)"]
+    G --> V4{"Issueが存在する?"}
+    V4 -->|No| R404["404 Not Found"]
+    V4 -->|Yes| Save["全フィールドを更新して保存"]
+    Save --> R200["200 OK"]
+```
 
 **代表的な境界値・分岐条件**:
 
@@ -1964,7 +2008,9 @@ app.MapPut("/api/templates/{id}", async (string id, SaveTemplateRequest req, Jso
 });
 ```
 
-**`allTemplates`に`candidate`自身の更新前の値が含まれることについて（確認事項）**: PUT側では`await store.GetAllAsync()`が返す一覧に、更新前（`req`反映前）の`template`エントリがそのまま含まれる。しかし`ResolveDemotions`は`Id`一致で候補を自己除外する仕様（2.3.2節「事前条件」）のため、この更新前エントリの`IsDefaultForStage`値が何であっても判定結果には影響しない。呼び出し順序（`GetAllAsync`を`template`のフィールド更新後・保存前に呼ぶ）を変えても結果は変わらないため、既存の`store.GetAsync`→フィールド更新→`GetAllAsync`という素直な順序をそのまま採用した。
+**`allTemplates`に`candidate`自身の更新前の値が含まれることについて（確認事項）**: PUT側では`await store.GetAllAsync()`が返す一覧に、更新前（`req`反映前）の`template`エントリがそのまま含まれる。しかし`ResolveDemotions`は`Id`一致で候補を自己除外する仕様（2.3.2節「事前条件」）のため、この更新前エントリの`IsDefaultForStage`値が何であっても判定結果には影響しない。
+
+呼び出し順序（`GetAllAsync`を`template`のフィールド更新後・保存前に呼ぶ）を変えても結果は変わらないため、既存の`store.GetAsync`→フィールド更新→`GetAllAsync`という素直な順序をそのまま採用した。
 
 **代表的な境界値・分岐条件**:
 
@@ -2062,7 +2108,9 @@ app.MapPost("/api/runs/{id}/cancel", async (
 
 **`IssueId`取得のタイミングについての設計判断**: `CancelAsync`成功後に`runStore.GetAsync(id)`を呼ぶ（先に取得してから`CancelAsync`を呼ぶ順序は採らない）。理由は、`CancelAsync`が`false`を返すケース（対象Runが存在しない・既に終了済み）では`StopLoopAsync`を呼ぶ必要がなく、この場合の無駄なストア読み取りを避けられるため。`Run.IssueId`は`CancelAsync`の呼び出し前後で値が変わらないプロパティであるため、取得順序自体が結果に影響することはない。
 
-**`run is null`の場合の扱い（発見した確認事項・軽微）**: `CancelAsync`は`_active`辞書上のプロセスKillに成功した時点で`true`を返しうる実装であり（2.5.3節のコード例）、`_runStore`側に対応する`Run`レコードが存在しない場合でも`true`を返しうる（理論上、`Run`削除等との極めて稀な競合）。本ハンドラはこのケースを`run is null`で検知し、`StopLoopAsync`を呼ばずに`200 OK`を返す（Run自体のキャンセルは成功しているため）。この防御的な扱いは、COMP-08の`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`いずれもが採用している「対象レコードが見つからない場合は例外を投げず何もしない」という一貫した方針（2.8.5〜2.8.7節）に整合させたものである。
+**`run is null`の場合の扱い（発見した確認事項・軽微）**: `CancelAsync`は`_active`辞書上のプロセスKillに成功した時点で`true`を返しうる実装であり（2.5.3節のコード例）、`_runStore`側に対応する`Run`レコードが存在しない場合でも`true`を返しうる（理論上、`Run`削除等との極めて稀な競合）。
+
+本ハンドラはこのケースを`run is null`で検知し、`StopLoopAsync`を呼ばずに`200 OK`を返す（Run自体のキャンセルは成功しているため）。この防御的な扱いは、COMP-08の`HandleRunCompletedAsync`/`StartLoopAsync`/`StopLoopAsync`いずれもが採用している「対象レコードが見つからない場合は例外を投げず何もしない」という一貫した方針（2.8.5〜2.8.7節）に整合させたものである。
 
 **`LoopStopReason`競合状態について**: component_design.md「`POST /api/runs/{id}/cancel`と手動中止時の`LoopStopReason`競合状態について」節が確認済みのとおり、本ハンドラ自体（`CancelAsync`→`StopLoopAsync`という同期的な2段呼び出し）に対策は不要であり、対策（`Evaluate`への`canceled`分岐追加・Issue単位ロック）はCOMP-08側（2.8.1節#3、2.8.4節）に閉じて実装済みである。本節ではこの記載を確認し、COMP-11側の追加変更は不要であることを再確認するに留める。
 
