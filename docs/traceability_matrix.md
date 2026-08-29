@@ -66,7 +66,7 @@
 | COMP-09 RetentionPruner（新規） | `SelectRunsToPrune`（新規・静的純粋関数）, `PruneAsync`（新規・副作用あり） |
 | COMP-10 OrphanSweepService（新規） | `OrphanDetection.Detect`（新規・静的純粋関数）, `OrphanSweepService.SweepAsync`（新規・副作用あり） |
 | COMP-11 Program.cs エンドポイント拡張 | `IssueUpdateValidator.IsKnownPermissionMode`（新規・静的純粋関数）, `IssueUpdateValidator.IsKnownStage`（新規・静的純粋関数）, `ToRunStartResponse`（新規・共通ヘルパー）, `POST /api/issues`ハンドラ（変更）, `PUT /api/issues/{id}`ハンドラ（変更）, `POST /api/templates` / `PUT /api/templates/{id}`ハンドラ（変更）, `POST /api/issues/{issueId}/runs`ハンドラ（変更）, `POST /api/issues/{issueId}/loop/start`ハンドラ（新規）, `POST /api/runs/{id}/cancel`ハンドラ（変更） |
-| COMP-12 SSE自動再接続・実行中Run検出（app.js） | |
+| COMP-12 SSE自動再接続・実行中Run検出（app.js） | `connectRunStream`（既存`startRun`からEventSource生成ロジックを集約・新設、副作用あり）, `selectIssue`（既存関数の変更・実行中Run検出ロジック追加）, `startRun`（既存関数のリファクタリング） |
 | COMP-13 排他制御拒否時のUX誘導（app.js） | |
 | COMP-14 自律ループ操作UI（app.js, styles.css） | |
 | COMP-15 GUI配置の改善（app.js, styles.css） | |

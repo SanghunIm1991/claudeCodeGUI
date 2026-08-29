@@ -2140,6 +2140,8 @@ app.MapPost("/api/runs/{id}/cancel", async (
 
 **責務**: component_design.md 3.4節COMP-12（628〜659行目）を参照（シグネチャ・処理内容・対応IDは変更しない）。「runIdを指定してログ表示をやり直す」共通関数`connectRunStream`を実装し、①ページ再読込時の再接続、②接続断からの自動復帰、③新規Run開始時の初回接続の3経路を同じ関数に統合する。既存の`startRun`（173〜209行目）が直接持っていた`EventSource`生成ロジックをここへ集約し、`selectIssue`（62〜68行目）にはRun一覧から実行中Runを検出して`connectRunStream`を呼ぶ判定を追加する。いずれもDOM操作・`EventSource`生成という副作用を伴うため、COMP-06のような純粋関数節ではなく、COMP-11同様「副作用を主とする節」として記載する。
 
+**ラウンド1レビュー指摘（重大）への対応**: `onerror`ハンドラが予約する`setTimeout`の再帰呼び出しは、component_design.mdの確定仕様（628〜659行目）ではコールバック内容まで含めて固定されているが、確定仕様が定める`connectRunStream`本体のシグネチャ・処理内容自体は変更せず、`setTimeout`コールバック内（再帰呼び出しの直前）に「予約時点のissueId/runIdが現在表示中の対象と一致するか」を確認する1行のガードのみを追加する（2.12.1節手順7、2.12.5節参照）。これはcomponent_design.mdが確定した`connectRunStream`のシグネチャ・対応ID、およびREQ-07（3経路統合）・REQ-08（クリア→全量再描画）・REQ-09（遅延再接続、即座に諦めない）の中核契約のいずれにも抵触しない追加的なガードである。
+
 ```js
 // 入力: issueId, runId  出力: なし（副作用としてEventSource接続・DOM更新）
 function connectRunStream(issueId, runId) {
@@ -2158,7 +2160,11 @@ function connectRunStream(issueId, runId) {
   };
   es.onerror = () => {                    // REQ-09: 即座に諦めず遅延後に再接続
     es.close();
-    setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS);
+    setTimeout(() => {
+      // 予約時点のissueId/runIdが、現在ユーザーが表示している対象と一致する場合のみ再接続する（2.12.5節「Issue切替時の後始末漏れ」への対策）。
+      if (issueId !== selectedIssueId || runId !== currentRunId) return;
+      connectRunStream(issueId, runId);
+    }, RECONNECT_DELAY_MS);
   };
 }
 ```
@@ -2173,6 +2179,7 @@ function connectRunStream(issueId, runId) {
 - `runId`: `string`。`Run.Id`。`EventSource`のURL組み立て（`` `/api/runs/${runId}/stream` ``）とグローバル状態`currentRunId`への代入に使う。
 - **DOM前提条件（重要）**: 呼び出し時点で`#run-log`・`#run-start`・`#run-cancel`の3要素がDOM上に存在すること。これは`renderIssueDetail`（70〜156行目）がIssue詳細画面のHTMLを`innerHTML`で構築済みであることを前提とする。`selectIssue`からの呼び出し（2.12.2節）は`renderIssueDetail(issue, runs)`呼び出し後に`connectRunStream`を呼ぶ順序を守ることで、この前提条件を満たす（`renderIssueDetail`は`innerHTML`代入のたびに新しいDOM要素を生成するため、`getElementById`は常に最新の要素を取得する。要素参照をキャッシュしないこの関数の実装は、この点で安全である）。
 - グローバル変数`activeEventSource`・`currentRunId`（39行目・173行目、既存宣言のまま流用）が事前に存在すること。
+- グローバル変数`selectedIssueId`（37行目、既存宣言のまま流用）が事前に存在すること。`onerror`ハンドラが予約する`setTimeout`コールバック内のガード（手順7参照）が、予約時点のissueIdと現在表示中のissueIdの一致確認に使う。
 
 **事後条件・副作用**:
 
@@ -2182,7 +2189,8 @@ function connectRunStream(issueId, runId) {
 4. `#run-start`を`disabled=true`、`#run-cancel`を`disabled=false`にする（実行中状態のボタン表示。ページ再読込直後の再接続・接続断からの自動復帰のいずれでも同じ表示になる）。
 5. 新規`EventSource`を`` `/api/runs/${runId}/stream` ``へ張り、`activeEventSource`に代入する。
 6. `onmessage`: 受信行を`appendLogLine`で追記する。行に`"type":"result"`という部分文字列が含まれる場合（COMP-06 2.6.2節が定義するJSON構造、モック実行・本番実行いずれも同一契約）、`es.close()`してから`finishRun(issueId)`を呼ぶ（Run終了検出→ボタン状態を戻す→履歴再読込。既存`finishRun`実装、232〜239行目は変更しない）。
-7. `onerror`: `es.close()`してから`setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS)`で自分自身を再度呼び出す。**`finishRun`は呼ばない**点が、置き換え対象の既存実装（205〜208行目、後述2.12.3節）との最大の差分である。ボタンは「実行中」表示のまま据え置かれ、ユーザーからは接続断が見えない（REQ-09の意図どおり）。
+7. `onerror`: `es.close()`してから`setTimeout(...)`で`RECONNECT_DELAY_MS`後に自分自身を再度呼び出す予約をする。**`finishRun`は呼ばない**点が、置き換え対象の既存実装（205〜208行目、後述2.12.3節）との最大の差分である。ボタンは「実行中」表示のまま据え置かれ、ユーザーからは接続断が見えない（REQ-09の意図どおり）。
+   `setTimeout`のコールバックは、`connectRunStream(issueId, runId)`を無条件に呼ぶのではなく、まず**「予約時点のissueId/runIdが、現在表示中の対象と一致するか」を確認するガード**（`if (issueId !== selectedIssueId || runId !== currentRunId) return;`）を先頭で行う。一致しない場合（呼び出し後に画面が別Issueへ切り替わった、または同一Issue内で新しいRunに切り替わった場合）は、`connectRunStream`を呼ばずに何もせず終える（古い再接続予約を静かに破棄する。2.12.5節「Issue切替時の後始末漏れ」参照）。一致する場合（通常の接続断からの復帰）のみ`connectRunStream(issueId, runId)`を実際に呼び出す。
 
 **戻り値**: なし（`void`）。
 
@@ -2201,8 +2209,10 @@ flowchart TD
     IsResult -->|No| Wait
     IsResult -->|Yes| CloseResult["es.close()"] --> Finish["finishRun(issueId)\n（ボタンを戻す・履歴再読込）"]
     Wait -->|onerror| CloseErr["es.close()"]
-    CloseErr --> Sched["setTimeout(\n  () =&gt; connectRunStream(issueId, runId),\n  RECONNECT_DELAY_MS\n)"]
-    Sched -.->|RECONNECT_DELAY_MS 後| Start
+    CloseErr --> Sched["setTimeout(\n  ...,\n  RECONNECT_DELAY_MS\n)"]
+    Sched -.->|RECONNECT_DELAY_MS 後| Guard{"issueId===selectedIssueId\nかつ\nrunId===currentRunId?"}
+    Guard -->|No| Discard["何もせず終える\n（古い再接続予約を破棄）"]
+    Guard -->|Yes| Start
 ```
 
 **代表的な境界値・分岐条件**:
@@ -2213,9 +2223,10 @@ flowchart TD
 | 2 | 既に`activeEventSource`が存在する（再接続・Issue切替時の2回目以降） | 旧`EventSource`を`.close()`してから新規生成。多重接続を防止（2.12.5節） |
 | 3 | `onmessage`で`"type":"result"`を含まない行を受信（`system`/`assistant`等） | `appendLogLine`で追記するのみ。接続は継続 |
 | 4 | `onmessage`で`"type":"result"`を含む行を受信（Run正常終了・失敗終了いずれも） | `es.close()` → `finishRun(issueId)`。以後`onerror`は発火しない（接続が正常にcloseされているため） |
-| 5 | `onerror`発火（サーバー再起動・一時的なネットワーク断など） | `es.close()` → `RECONNECT_DELAY_MS`後に自分自身を再呼び出し。`finishRun`は呼ばれず、ボタンは「実行中」表示のまま |
+| 5 | `onerror`発火（サーバー再起動・一時的なネットワーク断など）、`RECONNECT_DELAY_MS`経過時点でも同じissueId/runIdを表示中（通常経路） | `es.close()` → `RECONNECT_DELAY_MS`後、ガードを通過して自分自身を再呼び出し。`finishRun`は呼ばれず、ボタンは「実行中」表示のまま |
 | 6 | `onerror`が繰り返し発火し続ける（サーバーが長時間停止したままの場合、境界値） | `RECONNECT_DELAY_MS`間隔で無限に再試行する。設計上意図的な挙動（REQ-09）だが、リスクとして2.12.5節で検討する |
 | 7 | `runId`に対応する`Run`がサーバー側に存在しない（境界値、通常発生しない想定） | `StreamLogAsync`側は`File.Exists(logPath)`が`false`のため空のログを返し、`isActive`も`false`のため`yield break`。SSE接続自体は張られるがデータが流れず、`onmessage`も`onerror`も発火しない静止状態になりうる。呼び出し元（`selectIssue`・`startRun`）がいずれも実在確認済みの`runId`のみを渡す設計のため、通常経路では到達しない。呼び出し元の契約として明記するに留め、本関数側に追加の防御コードは設けない |
+| 8 | `onerror`発火後、`RECONNECT_DELAY_MS`経過前にユーザーが別Issueへ切り替える、または同一Issue内で新しいRunに切り替わる（境界値、2.12.5節「Issue切替時の後始末漏れ」） | `RECONNECT_DELAY_MS`経過時点で`issueId !== selectedIssueId`または`runId !== currentRunId`となりガード不一致。`connectRunStream`は呼ばれず、古い再接続予約は何もせず終わる。表示中の別Issue・別Runの画面状態（`#run-log`・ボタン・`currentRunId`）は上書きされない |
 
 #### 2.12.2 `selectIssue`への実行中Run検出ロジック追加（REQ-27）
 
@@ -2338,19 +2349,19 @@ const RECONNECT_DELAY_MS = 2000;   // COMP-12: SSE再接続までの遅延（REQ
 
 **サーバーが長時間停止したままの場合の無限リトライについて（意図的に許容するリスク）**: 2.12.1節境界値#6のとおり、`onerror`が発火し続ける限り`RECONNECT_DELAY_MS`間隔での再試行が無限に続く。この挙動はREQ-09が明示的に要求するもの（「`es.close()`で即座に諦めない」）であり、上限回数や指数バックオフを設けない設計をcomponent_design.mdが確定している。以下のいずれかに該当する間は再試行が止まる自然な終了経路が存在するため、リソースリークとしては限定的なリスクと判断する。
 
-- ユーザーがそのIssue詳細画面から離れる（別Issueを選択する）: 2.12.2節の追加分により`activeEventSource`が明示的に閉じられる。ただし下記「Issue切替時の後始末漏れ（発見した懸念）」のとおり、既に発火済みの`setTimeout`予約分までは打ち消せない
+- ユーザーがそのIssue詳細画面から離れる（別Issueを選択する）: 2.12.2節の追加分により`activeEventSource`が明示的に閉じられる。既に発火済みの`setTimeout`予約自体は`clearTimeout`等でキャンセルしないが、下記「Issue切替時の後始末漏れ（対策済み）」のガードにより、`RECONNECT_DELAY_MS`後に予約が発火しても実害（画面の誤上書き）は生じない
 - ページを再読込・タブを閉じる: ブラウザがJSの実行コンテキスト全体を破棄するため、`setTimeout`予約・`EventSource`ともに自動的に消滅する
 - サーバーが復旧する: `onmessage`が発火するようになり、通常のRun完了経路（`finishRun`）または継続監視に戻る
 
-**Issue切替時の後始末漏れ（発見した懸念、component_design.md確定仕様に起因）**: `connectRunStream`の`onerror`ハンドラ（確定仕様）は`setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS)`という形で、呼び出し時点の`issueId`・`runId`を**クロージャで固定**した上で自分自身を再帰的に呼び出す。この再帰呼び出しは、`selectedIssueId`が現在どのIssueを指しているかを一切参照せず、`RECONNECT_DELAY_MS`後に無条件で実行される。
-
-そのため、以下の順で操作すると、画面に表示されているIssue（B）のログ表示・ボタン状態・`currentRunId`が、既に離脱したはずのIssue（A）の再接続によって不意に上書きされる余地がある。
+**Issue切替時の後始末漏れ（対策済み、ラウンド1レビュー指摘への対応）**: `connectRunStream`の`onerror`ハンドラ（確定仕様）は、呼び出し時点の`issueId`・`runId`を**クロージャで固定**した上で、`RECONNECT_DELAY_MS`後に自分自身を再帰的に呼び出す`setTimeout`を予約する。何もガードしなければ、この再帰呼び出しは`selectedIssueId`が現在どのIssueを指しているかを一切参照せず無条件に実行されるため、以下の順で操作すると、画面に表示されているIssue（B）のログ表示・ボタン状態・`currentRunId`が、既に離脱したはずのIssue（A）の再接続によって不意に上書きされる余地があった。
 
 1. Issue Aの実行中Runに対して`connectRunStream`が接続中、`onerror`が発火し`setTimeout`が予約される
 2. `RECONNECT_DELAY_MS`が経過しきる前に、ユーザーがIssue Bへ切り替える（2.12.2節の分岐#3により、その時点の`activeEventSource`＝Issue A用の接続は閉じられる。ただし予約済みの`setTimeout`自体はキャンセルされない）
-3. `RECONNECT_DELAY_MS`経過後、予約されていた`connectRunStream(issueIdA, runIdA)`が発火し、画面がIssue Bを表示中にもかかわらず`#run-log`をクリアし、Issue A用の`EventSource`を新規に張り、`currentRunId`をIssue AのrunIdへ書き換えてしまう
+3. `RECONNECT_DELAY_MS`経過後、予約されていた再接続がガードなしに発火すると、画面がIssue Bを表示中にもかかわらず`#run-log`をクリアし、Issue A用の`EventSource`を新規に張り、`currentRunId`をIssue AのrunIdへ書き換えてしまう。この状態でユーザーが「中止」ボタンを押すと、画面と無関係なIssue A側のRunを誤って中止してしまう
 
-**扱い方針**: この懸念は`connectRunStream`自体の確定仕様（`setTimeout`コールバックの内容含む）に起因するものであり、component_design.mdが定めた処理内容を変更しない方針（本タスクの制約）に従い、本節では**確定仕様どおりに実装した上でこの懸念を明記するに留める**。是正するとすれば`setTimeout`コールバック内で`if (issueId !== selectedIssueId) return;`のようなガードを追加する案が考えられるが、これは確定仕様のコード（`onerror`ハンドラの中身）を変更することになるため、関数設計工程の裁量を超える。レビュー指摘として扱われるべき事項として記録し、component_design.md側の見直し（またはレビューでの明示的な許容判断）を待つ。
+**対策**: 2.12.1節手順7のとおり、`setTimeout`コールバックの先頭で`if (issueId !== selectedIssueId || runId !== currentRunId) return;`によるガードを追加し、予約時点の対象と現在表示中の対象が一致する場合のみ`connectRunStream`を実際に呼び出す。一致しない場合は何もせず終える（古い再接続予約を静かに破棄する）。`issueId`だけでなく`runId`も併せて比較するのは、同一Issue内で旧Runが中止され新しいRunが開始された場合（Issue自体は切り替わらないが対象Runが変わるケース）にも、旧Runの古い再接続予約が新Runの表示を上書きしないようにするためである。
+
+この対策は、component_design.mdが確定する`connectRunStream`のシグネチャ・対応ID（628〜659行目）を変更するものではなく、`setTimeout`コールバックの中身に一致確認のガードを1行追加するだけの範囲にとどまる。REQ-07（3経路統合）・REQ-08（クリア→全量再描画）・REQ-09（遅延再接続、即座に諦めない）のいずれの中核契約にも抵触しない。REQ-09が求める「サーバー復旧まで諦めず再試行し続ける」挙動は、対象（issueId/runId）が変わらない通常の接続断シナリオでは引き続きそのまま成立する。
 
 **代表的な境界値・分岐条件**:
 
@@ -2359,6 +2370,6 @@ const RECONNECT_DELAY_MS = 2000;   // COMP-12: SSE再接続までの遅延（REQ
 | 1 | `onmessage`/`onerror`いずれの経路でも、新規接続前に必ず`es.close()`を経由する | 多重接続は発生しない（上記「多重接続の防止について」） |
 | 2 | ページ再読込・タブクローズ | JS実行コンテキストごと破棄され、`setTimeout`予約・`EventSource`とも消滅する |
 | 3 | Issue切替（同一の実行中Runが継続している場合） | 2.12.2節分岐#1〜#3のいずれかで`activeEventSource`は正しく閉じ直される |
-| 4 | Issue切替後、直前のIssueの`onerror`由来`setTimeout`が事後に発火（境界値、上記「発見した懸念」） | 表示中の別Issueの状態が予期せず上書きされうる。component_design.md確定仕様に起因する既知の懸念としてレビューへ申し送る |
+| 4 | Issue切替後（または同一Issue内で新Runへの切替後）、直前の`onerror`由来`setTimeout`が事後に発火（境界値、上記「Issue切替時の後始末漏れ」） | `setTimeout`コールバック内のガードにより`issueId !== selectedIssueId`または`runId !== currentRunId`と判定され、`connectRunStream`は呼ばれない。表示中の別Issue・別Runの状態は上書きされない（対策済み） |
 
 対応ID: REQ-07, REQ-08, REQ-09, REQ-27, CON-06
