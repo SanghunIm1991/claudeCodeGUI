@@ -2133,3 +2133,232 @@ app.MapPost("/api/runs/{id}/cancel", async (
 | `GET /api/runs/{id}/stream` | 同上、SSE自動再接続（REQ-07〜09, REQ-27）はCOMP-12（フロント側）・既存実装の範囲であり、本節（COMP-11のPUT/POST系ハンドラ変更）の対象外 |
 
 対応ID: REQ-06, REQ-12, REQ-14, REQ-15, REQ-16, REQ-17, REQ-18, REQ-19, CON-04, CON-06
+
+### 2.12 COMP-12 SSE自動再接続・実行中Run検出（`app.js`）
+
+**対象ファイル**: `src/ClaudeCodeGui/wwwroot/app.js`
+
+**責務**: component_design.md 3.4節COMP-12（628〜659行目）を参照（シグネチャ・処理内容・対応IDは変更しない）。「runIdを指定してログ表示をやり直す」共通関数`connectRunStream`を実装し、①ページ再読込時の再接続、②接続断からの自動復帰、③新規Run開始時の初回接続の3経路を同じ関数に統合する。既存の`startRun`（173〜209行目）が直接持っていた`EventSource`生成ロジックをここへ集約し、`selectIssue`（62〜68行目）にはRun一覧から実行中Runを検出して`connectRunStream`を呼ぶ判定を追加する。いずれもDOM操作・`EventSource`生成という副作用を伴うため、COMP-06のような純粋関数節ではなく、COMP-11同様「副作用を主とする節」として記載する。
+
+```js
+// 入力: issueId, runId  出力: なし（副作用としてEventSource接続・DOM更新）
+function connectRunStream(issueId, runId) {
+  if (activeEventSource) activeEventSource.close();
+  currentRunId = runId;
+  const logView = document.getElementById("run-log");
+  logView.textContent = "";              // REQ-08: クリアしてから再描画
+  document.getElementById("run-start").disabled = true;
+  document.getElementById("run-cancel").disabled = false;
+
+  const es = new EventSource(`/api/runs/${runId}/stream`);
+  activeEventSource = es;
+  es.onmessage = (ev) => {
+    appendLogLine(logView, ev.data);
+    if (ev.data.includes('"type":"result"')) { es.close(); finishRun(issueId); }
+  };
+  es.onerror = () => {                    // REQ-09: 即座に諦めず遅延後に再接続
+    es.close();
+    setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS);
+  };
+}
+```
+
+#### 2.12.1 `connectRunStream(issueId, runId)`
+
+**副作用を伴う関数（DOM更新・`EventSource`接続・グローバル状態`activeEventSource`/`currentRunId`の変更。単体テスト対象外、手動確認・結合テストで検証）**。
+
+**事前条件**:
+
+- `issueId`: `string`。呼び出し元（`startRun`・`selectIssue`）が扱う`Issue.Id`をそのまま渡す。本関数自身はこの値の妥当性検証を行わない（`onmessage`/`onerror`内のクロージャとして`finishRun(issueId)`・再帰呼び出しに使うのみで、DOM要素IDの組み立てには使わない）。
+- `runId`: `string`。`Run.Id`。`EventSource`のURL組み立て（`` `/api/runs/${runId}/stream` ``）とグローバル状態`currentRunId`への代入に使う。
+- **DOM前提条件（重要）**: 呼び出し時点で`#run-log`・`#run-start`・`#run-cancel`の3要素がDOM上に存在すること。これは`renderIssueDetail`（70〜156行目）がIssue詳細画面のHTMLを`innerHTML`で構築済みであることを前提とする。`selectIssue`からの呼び出し（2.12.2節）は`renderIssueDetail(issue, runs)`呼び出し後に`connectRunStream`を呼ぶ順序を守ることで、この前提条件を満たす（`renderIssueDetail`は`innerHTML`代入のたびに新しいDOM要素を生成するため、`getElementById`は常に最新の要素を取得する。要素参照をキャッシュしないこの関数の実装は、この点で安全である）。
+- グローバル変数`activeEventSource`・`currentRunId`（39行目・173行目、既存宣言のまま流用）が事前に存在すること。
+
+**事後条件・副作用**:
+
+1. 呼び出し時点で`activeEventSource`が非nullなら`.close()`を呼んでから新規接続に進む（多重接続防止。詳細は2.12.5節）。
+2. `currentRunId`を`runId`に更新する（`cancelRun`・`finishRun`が参照する値。旧`startRun`174〜192行目にあった`currentRunId = run.id;`の代入をここに集約）。
+3. `#run-log`のテキストを空にしてから（REQ-08前段）、新規`EventSource`が返す行を`appendLogLine`で追記していく（REQ-08後段）。この「クリアしてから全体再描画」で二重表示を防げる根拠は、バックエンド`ClaudeRunEngine.StreamLogAsync`（`Services/ClaudeRunEngine.cs:188-210`）が接続のたびに`sentUpTo`を`0`から数え直し、`File.ReadAllLinesAsync`で既存ログ全行を毎回再送信してから`ctx.TailAsync(sentUpTo, ct)`で新規行に続ける実装になっているため（198〜209行目）。つまり「サーバー側が常に全量を送り直す」設計と「クライアント側が受信前に画面をクリアする」設計が対になって初めてREQ-08が成立する。**この対応関係はcomponent_design.md確定仕様のコード自体には明記されていないため、本節で補足として明記する**。
+4. `#run-start`を`disabled=true`、`#run-cancel`を`disabled=false`にする（実行中状態のボタン表示。ページ再読込直後の再接続・接続断からの自動復帰のいずれでも同じ表示になる）。
+5. 新規`EventSource`を`` `/api/runs/${runId}/stream` ``へ張り、`activeEventSource`に代入する。
+6. `onmessage`: 受信行を`appendLogLine`で追記する。行に`"type":"result"`という部分文字列が含まれる場合（COMP-06 2.6.2節が定義するJSON構造、モック実行・本番実行いずれも同一契約）、`es.close()`してから`finishRun(issueId)`を呼ぶ（Run終了検出→ボタン状態を戻す→履歴再読込。既存`finishRun`実装、232〜239行目は変更しない）。
+7. `onerror`: `es.close()`してから`setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS)`で自分自身を再度呼び出す。**`finishRun`は呼ばない**点が、置き換え対象の既存実装（205〜208行目、後述2.12.3節）との最大の差分である。ボタンは「実行中」表示のまま据え置かれ、ユーザーからは接続断が見えない（REQ-09の意図どおり）。
+
+**戻り値**: なし（`void`）。
+
+##### `connectRunStream`の処理フロー（補足図）
+
+```mermaid
+flowchart TD
+    Start(["connectRunStream(issueId, runId)"]) --> Close{"activeEventSource\nが非null?"}
+    Close -->|Yes| CloseOld["activeEventSource.close()"]
+    Close -->|No| SetState
+    CloseOld --> SetState["currentRunId = runId\nlogViewをクリア（REQ-08前段）\nrun-start=disabled, run-cancel=enabled"]
+    SetState --> NewES["new EventSource(/api/runs/{runId}/stream)\nactiveEventSource に代入"]
+    NewES --> Wait{"イベント待機"}
+    Wait -->|onmessage| Append["appendLogLine(logView, ev.data)"]
+    Append --> IsResult{"data に\n&quot;type&quot;:&quot;result&quot;\nを含む?"}
+    IsResult -->|No| Wait
+    IsResult -->|Yes| CloseResult["es.close()"] --> Finish["finishRun(issueId)\n（ボタンを戻す・履歴再読込）"]
+    Wait -->|onerror| CloseErr["es.close()"]
+    CloseErr --> Sched["setTimeout(\n  () =&gt; connectRunStream(issueId, runId),\n  RECONNECT_DELAY_MS\n)"]
+    Sched -.->|RECONNECT_DELAY_MS 後| Start
+```
+
+**代表的な境界値・分岐条件**:
+
+| # | 状況 | 挙動 |
+|---|---|---|
+| 1 | 初回呼び出し（`activeEventSource`が`null`、境界値） | `.close()`は呼ばれない（`if`ガードにより安全）。新規`EventSource`を生成 |
+| 2 | 既に`activeEventSource`が存在する（再接続・Issue切替時の2回目以降） | 旧`EventSource`を`.close()`してから新規生成。多重接続を防止（2.12.5節） |
+| 3 | `onmessage`で`"type":"result"`を含まない行を受信（`system`/`assistant`等） | `appendLogLine`で追記するのみ。接続は継続 |
+| 4 | `onmessage`で`"type":"result"`を含む行を受信（Run正常終了・失敗終了いずれも） | `es.close()` → `finishRun(issueId)`。以後`onerror`は発火しない（接続が正常にcloseされているため） |
+| 5 | `onerror`発火（サーバー再起動・一時的なネットワーク断など） | `es.close()` → `RECONNECT_DELAY_MS`後に自分自身を再呼び出し。`finishRun`は呼ばれず、ボタンは「実行中」表示のまま |
+| 6 | `onerror`が繰り返し発火し続ける（サーバーが長時間停止したままの場合、境界値） | `RECONNECT_DELAY_MS`間隔で無限に再試行する。設計上意図的な挙動（REQ-09）だが、リスクとして2.12.5節で検討する |
+| 7 | `runId`に対応する`Run`がサーバー側に存在しない（境界値、通常発生しない想定） | `StreamLogAsync`側は`File.Exists(logPath)`が`false`のため空のログを返し、`isActive`も`false`のため`yield break`。SSE接続自体は張られるがデータが流れず、`onmessage`も`onerror`も発火しない静止状態になりうる。呼び出し元（`selectIssue`・`startRun`）がいずれも実在確認済みの`runId`のみを渡す設計のため、通常経路では到達しない。呼び出し元の契約として明記するに留め、本関数側に追加の防御コードは設けない |
+
+#### 2.12.2 `selectIssue`への実行中Run検出ロジック追加（REQ-27）
+
+既存実装（62〜68行目）は、Run一覧取得後に`renderIssueDetail(issue, runs)`を呼ぶのみで終わる。ここに「実行中Runがあれば`connectRunStream`を呼ぶ」判定を追加する。
+
+```js
+async function selectIssue(id) {
+  selectedIssueId = id;
+  renderIssueList();
+  const issue = await api(`/api/issues/${id}`);
+  const runs = await api(`/api/issues/${id}/runs`);
+  renderIssueDetail(issue, runs);
+
+  const runningRun = runs.find((r) => r.status === "running");   // REQ-27
+  if (runningRun) {
+    connectRunStream(issue.id, runningRun.id);                    // REQ-07
+  } else if (activeEventSource) {
+    // 設計判断（component_design.md確定仕様には含まれない、本節での追加分）:
+    // 直前に選択していた別Issueの再接続ループが残っている場合、切替先Issueに実行中Runがなければ確実に閉じる。
+    activeEventSource.close();
+    activeEventSource = null;
+    currentRunId = null;
+  }
+}
+```
+
+**呼び出し順序についての事前条件**: `connectRunStream`は2.12.1節の事前条件どおり`#run-log`等のDOM要素の存在を前提とするため、`renderIssueDetail(issue, runs)`の**後**に呼ぶ。`renderIssueDetail`は非同期関数ではないため、`await`なしで呼び出し完了後に同期的にDOMへ反映される（`loadArtifactDir`の非同期処理はartifact欄に閉じており、`run-log`等の要素生成には関与しない）。
+
+**`else if (activeEventSource)`分岐の位置づけ（設計判断）**: component_design.mdの確定仕様は「実行中Runがあれば`connectRunStream`を呼ぶ」という順方向の記載のみで、「実行中Runがない場合に何もしない」のか「明示的に後始末する」のかを規定していない。素直に読めば前者（何もしない）だが、その場合、直前に選択していたIssueで再接続ループ（`onerror`→`setTimeout`→再接続）が進行中だと、Issueを切り替えても古い`EventSource`・古い再接続ループが残り続ける（2.12.5節「Issue切替時の後始末漏れ」参照）。この後始末は確定仕様の`connectRunStream`自体を変更するものではなく、`selectIssue`側（component_design.mdが処理内容を確定していない箇所）の追加であるため、本節の裁量で追加する設計判断として明記する。
+
+**代表的な境界値・分岐条件**:
+
+| # | `runs`の内容 | `activeEventSource`（切替前） | 挙動 |
+|---|---|---|---|
+| 1 | `status === "running"`のRunが1件ある | - | `connectRunStream(issue.id, runningRun.id)`を呼ぶ。REQ-08により`run-log`はクリアされてから全量再描画される |
+| 2 | `status === "running"`のRunがない（`Runs`が空、または全て`succeeded`/`failed`/`canceled`） | `null`（初回選択、または既に閉じられている） | 何もしない。ボタンは`renderIssueDetail`が生成した既定状態（`run-start`有効・`run-cancel`無効）のまま |
+| 3 | `status === "running"`のRunがない | 非null（直前のIssueの接続・再接続ループが残っている、境界値） | `.close()`して`activeEventSource`・`currentRunId`をリセットする（本節の追加分） |
+| 4 | `status === "running"`のRunが理論上複数ある（REQ-10の排他制御が正しく機能していれば発生しない想定） | - | `Array.prototype.find`は先頭要素を返すため、2件目以降は無視される。COMP-05/08側のREQ-10〜12排他制御を前提とした割り切りであり、本関数側で複数件の存在チェックは行わない |
+
+#### 2.12.3 `startRun`のリファクタリング（既存173〜209行目）
+
+**変更前後の対応関係**:
+
+| 既存コード（173〜209行目） | リファクタリング後の扱い |
+|---|---|
+| 174〜181行目（テンプレート・パーミッションモード読み取り、未選択時の`alert`） | **変更なし、そのまま残す** |
+| 183〜186行目（`logView`クリア、ボタン活性切替） | **そのまま残す**（下記「二重発生の是非」参照） |
+| 188〜191行目（`POST /api/issues/{issueId}/runs`呼び出し） | **変更なし、そのまま残す** |
+| 192行目（`currentRunId = run.id;`） | **削除**。`connectRunStream`内部（2.12.1節手順2）に集約 |
+| 194〜196行目（`activeEventSource`のclose・`new EventSource`生成・代入） | **削除**。`connectRunStream`内部（同手順1・5）に集約 |
+| 198〜208行目（`onmessage`/`onerror`ハンドラ定義） | **削除**。`connectRunStream`内部（同手順6・7）に集約 |
+| （新規） | 末尾に`connectRunStream(issueId, run.id);`の1行を追加 |
+
+```js
+async function startRun(issueId) {
+  const templateId = document.getElementById("run-template").value;
+  const permissionMode = document.getElementById("run-permission").value;
+  if (!templateId) {
+    alert("テンプレートがありません。先にプロンプトテンプレートを作成してください。");
+    return;
+  }
+
+  // POST完了を待つ間の二重クリック防止のため、ボタン状態はここで即座に切り替える。
+  // connectRunStream側でも同じDOM操作を行うが、同じ値の再代入なので実害はない（下記「二重発生の是非」参照）。
+  const logView = document.getElementById("run-log");
+  logView.textContent = "";
+  document.getElementById("run-start").disabled = true;
+  document.getElementById("run-cancel").disabled = false;
+
+  const run = await api(`/api/issues/${issueId}/runs`, {
+    method: "POST",
+    body: JSON.stringify({ templateId, permissionMode }),
+  });
+  connectRunStream(issueId, run.id);   // REQ-07: EventSource生成ロジックの重複を排除（component_design.md確定仕様どおり）
+}
+```
+
+**183〜186行目を`connectRunStream`側へ完全に移譲しなかった理由（二重発生の是非）**: `connectRunStream`自体も同じ3行（ログクリア・ボタン活性切替）を行う（2.12.1節手順3・4）ため、両方に置くと処理が二重に実行される。しかし以下の理由により、あえて`startRun`側にも残す設計とした。
+
+- 既存実装は`POST`リクエストの**送信前**にボタンを`disabled`にすることで、応答待ちの間の二重クリック（同一Issueへの多重Run開始）を抑止していた（意図の有無は既存コードから読み取れないが、結果的にそう機能している）。
+- `connectRunStream`は`POST`が成功して`run`オブジェクトを受け取った**後**にしか呼べない（`runId`が未確定のため）。もし183〜186行目を削除して`connectRunStream`呼び出しのみに一本化すると、`POST`のネットワーク往復中はボタンが有効なままになり、二重クリックで複数の`POST`が飛ぶ余地が生まれる（REQ-10/11のサーバー側排他制御により2件目は`409 Conflict`で拒否されるため実害は限定的だが、UXとしては後退する）。
+- 二重実行される3行はいずれも同じ値へのべき等な再代入（`textContent = ""`、`disabled = true/false`）であり、副作用の重複によるDOM不整合は発生しない。
+
+以上より、**この2箇所の重複はcomponent_design.mdが求める「EventSource生成ロジックの重複排除」とは別種の重複（DOM状態の初期化の重複）であり、意図的に許容する**設計判断として明記する。
+
+**`POST`が例外を投げた場合（`409 Conflict`等）の挙動について（発見した確認事項、既存実装から変わらない範囲）**: `api()`ヘルパー（10〜21行目）は非`2xx`応答時に`Error`を`throw`する。`startRun`はこの例外を`try/catch`していないため、183〜186行目でボタンを`disabled`にした直後に`POST`が例外を投げると、`connectRunStream`まで到達せず、ボタンが「実行中」表示のまま固まる（`run-start`が`disabled`のまま復帰しない）。**この挙動は既存実装（リファクタリング前の173〜209行目）から変わらない**（既存も185〜186行目でボタンを切り替えた後に188行目の`await api(...)`を呼んでおり、同じ経路で同じ問題が起こりうる）。REQ-13（拒否時の中止操作誘導）に対応するUXは別コンポーネント（component_design.mdの確定仕様上、COMP-12の対象外）が担う想定であり、本節ではこの`try/catch`未対応を新規の劣化ではなく既存からの申し送り事項として記録するに留める。
+
+**代表的な境界値・分岐条件**:
+
+| # | 状況 | 挙動 |
+|---|---|---|
+| 1 | `templateId`が空（テンプレート未選択） | `alert`を表示して`return`。`POST`は送信されない。ボタン状態・`logView`は変更しない |
+| 2 | `POST`成功（通常経路） | ボタン・`logView`が2回（`startRun`内・`connectRunStream`内）べき等に更新された後、`connectRunStream`が新規`EventSource`を張る |
+| 3 | `POST`が`409 Conflict`等で例外を投げる（境界値、REQ-12の排他拒否時） | `startRun`内でボタンを`disabled`にした直後に例外が送出され、`connectRunStream`は呼ばれない。ボタンが実行中表示のまま復帰しない（既存実装から変わらない挙動、上記参照） |
+
+#### 2.12.4 `RECONNECT_DELAY_MS`の値についての設計判断
+
+component_design.mdの確定仕様は`RECONNECT_DELAY_MS`という定数名のみを示し、具体的な値・宣言位置は確定していない。本節で以下のとおり確定する。
+
+**宣言位置**: グローバル変数`activeEventSource`（39行目）の直後に、他のSSE関連状態と並べて追加する。
+
+```js
+let activeEventSource = null;
+const RECONNECT_DELAY_MS = 2000;   // COMP-12: SSE再接続までの遅延（REQ-09）
+```
+
+**値: `2000`（2秒）とする。根拠**:
+
+- 本アプリはローカル単一ユーザー向け（`localhost`上のASP.NET Coreサーバーに対する接続、CLAUDE.md「実行環境」節）であり、想定される接続断の主因は本番の分散環境のような長時間のネットワーク障害ではなく、開発中の`dotnet run`再起動や、サーバー側の一時的な処理詰まり（Runプロセスの起動待ち等）程度である。数秒以内に復旧するケースが大半と見積もれる。
+- 短すぎる値（例: 数百ミリ秒）は、サーバーが本当に落ちている間（プロセスクラッシュ・ビルド待ち等、数秒〜十数秒続くケース）に`EventSource`の生成・即時`onerror`・再試行を高頻度で繰り返し、ブラウザ側のイベントループとサーバーへの接続試行の双方に無駄な負荷をかける。
+- 長すぎる値（例: 10秒以上）は、一時的な瞬断からの復帰体感が悪化し、REQ-09が意図する「気づかれないうちに直っている」UXを損なう。
+- ブラウザ標準の`EventSource`が`retry`フィールド未指定時に用いる既定の自動再接続間隔が3000ms程度であることも参考にしつつ、本アプリはログ全量再送信（2.12.1節手順3）を伴うため、これより短い間隔でも1回あたりのコストは小さい（ログファイルはIssue単位・Run単位の小規模なテキストファイルであり、`File.ReadAllLinesAsync`の負荷は無視できる規模、`ClaudeRunEngine.cs:196`参照）。
+- 以上を踏まえ、標準的な既定値より若干短い**2000ms（2秒）**を採用する。テストしやすい値（1回のリトライが2秒で観測できる）でもある。
+
+**代替案として検討したが採用しなかったもの**: 指数バックオフ（再試行のたびに間隔を延ばす方式）も検討したが、component_design.mdの確定仕様が`setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS)`という**固定間隔**の呼び出しを明示しているため、これを変更する余地はない（変更するとcomponent_design.md確定仕様と矛盾するため、本節では固定値のみを採用し、指数バックオフは将来のレビュー指摘・要件変更があれば検討する事項として記録するに留める）。
+
+#### 2.12.5 無限再接続によるリソースリーク・無限ループのリスクについての検討
+
+**多重接続の防止について**: `connectRunStream`は呼び出しのたびに`if (activeEventSource) activeEventSource.close();`を先頭で実行するため（2.12.1節手順1）、同一の`activeEventSource`スロットに対して新旧2つの`EventSource`が同時に生きることはない。`EventSource.close()`は複数回呼んでも安全（冪等、[WHATWG仕様](https://html.spec.whatwg.org/)上`readyState`を`CLOSED`にするだけの操作）なため、`onmessage`・`onerror`のいずれの経路で`es.close()`を呼んだ後に`connectRunStream`が再度`activeEventSource.close()`を呼んでも問題は起きない。
+
+**サーバーが長時間停止したままの場合の無限リトライについて（意図的に許容するリスク）**: 2.12.1節境界値#6のとおり、`onerror`が発火し続ける限り`RECONNECT_DELAY_MS`間隔での再試行が無限に続く。この挙動はREQ-09が明示的に要求するもの（「`es.close()`で即座に諦めない」）であり、上限回数や指数バックオフを設けない設計をcomponent_design.mdが確定している。以下のいずれかに該当する間は再試行が止まる自然な終了経路が存在するため、リソースリークとしては限定的なリスクと判断する。
+
+- ユーザーがそのIssue詳細画面から離れる（別Issueを選択する）: 2.12.2節の追加分により`activeEventSource`が明示的に閉じられる。ただし下記「Issue切替時の後始末漏れ（発見した懸念）」のとおり、既に発火済みの`setTimeout`予約分までは打ち消せない
+- ページを再読込・タブを閉じる: ブラウザがJSの実行コンテキスト全体を破棄するため、`setTimeout`予約・`EventSource`ともに自動的に消滅する
+- サーバーが復旧する: `onmessage`が発火するようになり、通常のRun完了経路（`finishRun`）または継続監視に戻る
+
+**Issue切替時の後始末漏れ（発見した懸念、component_design.md確定仕様に起因）**: `connectRunStream`の`onerror`ハンドラ（確定仕様）は`setTimeout(() => connectRunStream(issueId, runId), RECONNECT_DELAY_MS)`という形で、呼び出し時点の`issueId`・`runId`を**クロージャで固定**した上で自分自身を再帰的に呼び出す。この再帰呼び出しは、`selectedIssueId`が現在どのIssueを指しているかを一切参照せず、`RECONNECT_DELAY_MS`後に無条件で実行される。
+
+そのため、以下の順で操作すると、画面に表示されているIssue（B）のログ表示・ボタン状態・`currentRunId`が、既に離脱したはずのIssue（A）の再接続によって不意に上書きされる余地がある。
+
+1. Issue Aの実行中Runに対して`connectRunStream`が接続中、`onerror`が発火し`setTimeout`が予約される
+2. `RECONNECT_DELAY_MS`が経過しきる前に、ユーザーがIssue Bへ切り替える（2.12.2節の分岐#3により、その時点の`activeEventSource`＝Issue A用の接続は閉じられる。ただし予約済みの`setTimeout`自体はキャンセルされない）
+3. `RECONNECT_DELAY_MS`経過後、予約されていた`connectRunStream(issueIdA, runIdA)`が発火し、画面がIssue Bを表示中にもかかわらず`#run-log`をクリアし、Issue A用の`EventSource`を新規に張り、`currentRunId`をIssue AのrunIdへ書き換えてしまう
+
+**扱い方針**: この懸念は`connectRunStream`自体の確定仕様（`setTimeout`コールバックの内容含む）に起因するものであり、component_design.mdが定めた処理内容を変更しない方針（本タスクの制約）に従い、本節では**確定仕様どおりに実装した上でこの懸念を明記するに留める**。是正するとすれば`setTimeout`コールバック内で`if (issueId !== selectedIssueId) return;`のようなガードを追加する案が考えられるが、これは確定仕様のコード（`onerror`ハンドラの中身）を変更することになるため、関数設計工程の裁量を超える。レビュー指摘として扱われるべき事項として記録し、component_design.md側の見直し（またはレビューでの明示的な許容判断）を待つ。
+
+**代表的な境界値・分岐条件**:
+
+| # | 状況 | 挙動 |
+|---|---|---|
+| 1 | `onmessage`/`onerror`いずれの経路でも、新規接続前に必ず`es.close()`を経由する | 多重接続は発生しない（上記「多重接続の防止について」） |
+| 2 | ページ再読込・タブクローズ | JS実行コンテキストごと破棄され、`setTimeout`予約・`EventSource`とも消滅する |
+| 3 | Issue切替（同一の実行中Runが継続している場合） | 2.12.2節分岐#1〜#3のいずれかで`activeEventSource`は正しく閉じ直される |
+| 4 | Issue切替後、直前のIssueの`onerror`由来`setTimeout`が事後に発火（境界値、上記「発見した懸念」） | 表示中の別Issueの状態が予期せず上書きされうる。component_design.md確定仕様に起因する既知の懸念としてレビューへ申し送る |
+
+対応ID: REQ-07, REQ-08, REQ-09, REQ-27, CON-06
