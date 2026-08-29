@@ -2693,7 +2693,8 @@ component_design.md（665行目）は「`startRun`（およびCOMP-14の`startLo
 **事前条件**:
 
 - `renderIssueDetail`（既存、70〜156行目）がIssue詳細画面のHTMLを`innerHTML`で構築済みであり、`#issue-edit-form`（82〜95行目）・`.run-controls`（97〜108行目、`run-start`/`run-cancel`を含む）が生成済みであること。本節はこの構造に要素を追加するのみで、CON-02が禁じる画面構造（縦一列配置）自体の変更は行わない。
-- COMP-13（2.13節）が確定済みの`api()`拡張（`err.status`/`err.body`プロパティ付き例外、2.13.1節）・`handleStartRunError`（2.13.2節）が実装済みであること。本節はいずれも変更せずそのまま再利用する。
+- COMP-13（2.13節）が確定済みの`api()`拡張（`err.status`/`err.body`プロパティ付き例外、2.13.1節）が実装済みであること。本節はこれを変更せずそのまま再利用する（`handleStartRunError`自体は本節では再利用しない。理由は2.14.2節「409の扱い」参照。COMP-13ラウンド1レビュー指摘への対応）。
+- COMP-12（2.12.1節）が確定済みの`finishRun`（既存、232〜239行目）が実装済みであること。本節も他コンポーネント同様、これを変更せずそのまま再利用する。
 - COMP-11（2.11.5節・2.11.9節）が確定済みの`PUT /api/issues/{id}`ハンドラ（`UpdateIssueRequest`が`LoopEnabled`・`DefaultPermissionMode`を含む）・`POST /api/issues/{issueId}/loop/start`ハンドラ（成功時`202 Accepted`/`409 Conflict`、失敗時`400 Bad Request`、2.11.9節境界値表参照）が実装済みであること。
 - COMP-01（2.1節）が確定済みの`Issue`追加プロパティ（`LoopEnabled`・`DefaultPermissionMode`・`LoopConsecutiveRunCount`・`LoopStopReason`）が、`GET /api/issues`・`GET /api/issues/{id}`のレスポンスにcamelCaseで含まれること。既存`Program.cs`（30〜34行目）はいずれも`Issue`オブジェクトをそのまま`Results.Ok`で返す実装であり、DTOによる投影を行っていないため、モデル側へのプロパティ追加のみで自動的にレスポンスへ反映される（本節側で追加のシリアライズ対応は不要）。
 - CON-04（`bypassPermissions`を含む現状の3値プルダウンを維持）を踏まえ、`#run-permission`セレクト（既存、101〜105行目）自体は変更しない。`#e-default-permission-mode`は同じ3値（`acceptEdits`/`bypassPermissions`/`plan`）を持つ別要素として新設する。
@@ -2779,7 +2780,7 @@ document.getElementById("loop-start").addEventListener("click", () => startLoop(
 
 ```js
 // 入力: issueId  出力: なし（副作用としてPOST送信・loop-startボタンのdisabled切替、
-//        成功時はconnectRunStreamへの接続、失敗時はalertまたはCOMP-13 handleStartRunErrorへの委譲）
+//        成功時はconnectRunStreamへの接続、失敗時はalertまたはhandleStartLoopConflictErrorへの委譲）
 async function startLoop(issueId) {
   const loopStartBtn = document.getElementById("loop-start");
   loopStartBtn.disabled = true;   // POST送信中の二重クリック防止のみが目的（設計判断は下記参照）
@@ -2791,13 +2792,14 @@ async function startLoop(issueId) {
     loopStartBtn.disabled = false;
     if (err.status === 400) {
       // 既定テンプレート未設定またはIssue不存在（2.11.9節）。
-      // COMP-13のhandleStartRunErrorは409固有の中止誘導ロジックのため、400では流用しない。
+      // handleStartLoopConflictErrorは409固有の中止誘導ロジックのため、400では流用しない。
       alert(err.body?.error ?? "ループを開始できませんでした。");
       return;
     }
     // 409（同一Issueへの手動Run実行中等との排他拒否、2.11.9節境界値#4）およびそれ以外の例外は、
-    // COMP-13が確定済みのhandleStartRunErrorへ委譲する（confirm〜中止POST、run-start/run-cancelの復帰を再利用）。
-    await handleStartRunError(err, issueId);
+    // 専用の新規関数handleStartLoopConflictErrorへ委譲する（COMP-13のhandleStartRunErrorをそのまま流用しない
+    // 理由は下記「409の扱い」参照）。
+    await handleStartLoopConflictError(err, issueId);
     return;
   }
   loopStartBtn.disabled = false;
@@ -2805,17 +2807,59 @@ async function startLoop(issueId) {
 }
 ```
 
-**宣言位置**: `cancelRun`（既存、241〜244行目）の直後に配置する。`startRun`・`handleStartRunError`と同じRun操作系のヘルパー群にまとめる。
+**宣言位置**: `cancelRun`（既存、241〜244行目）の直後に配置する。`startRun`・`handleStartLoopConflictError`と同じRun操作系のヘルパー群にまとめる。
 
-**409を`handleStartRunError`へ委譲する設計判断（400との分岐理由）**: component_design.mdのCOMP-14責務記述は400時の`alert`分岐のみを明記し、409の扱いは規定していない（2.13.4節参照）。ここで、`POST /api/issues/{issueId}/loop/start`が409を返しうるかを確認した。`StartLoopAsync`（COMP-08 2.8.6節）はIssue単位ロックの下で`Issue.LoopEnabled`等を初期化した後、`ClaudeRunEngine.StartAsync`（COMP-05の`_activeIssueRuns`による排他制御）を呼ぶ設計であり、対象Issueに対して既に別のRunが実行中であれば`StartAsync`が排他拒否系の`RunStartResult(rejectedRun, winningRunId)`を返す。この場合`ToRunStartResponse`（2.11.7節）は`409 Conflict`をそのまま返す（同一Issueへ「実行」ボタンで手動Run中に「自律ループ開始」を押した場合、またはその逆の場合に発生しうる）。
+**409の扱い（`handleStartRunError`をそのまま流用しない設計判断・新規関数`handleStartLoopConflictError`）**: component_design.mdのCOMP-14責務記述は400時の`alert`分岐のみを明記し、409の扱いは規定していない（2.13.4節参照、`startLoop`側の裁量とされている）。ここで、`POST /api/issues/{issueId}/loop/start`が409を返しうるかを確認した。`StartLoopAsync`（COMP-08 2.8.6節）はIssue単位ロックの下で`Issue.LoopEnabled`等を初期化した後、`ClaudeRunEngine.StartAsync`（COMP-05の`_activeIssueRuns`による排他制御）を呼ぶ設計であり、対象Issueに対して既に別のRunが実行中であれば`StartAsync`が排他拒否系の`RunStartResult(rejectedRun, winningRunId)`を返す。この場合`ToRunStartResponse`（2.11.7節）は`409 Conflict`をそのまま返す（同一Issueへ「実行」ボタンで手動Run中に「自律ループ開始」を押した場合に発生しうる。この場合`conflictingRunId`は現に実行中の手動Runを指し、その時点で`run-cancel`は既に有効・`run-start`は既に無効な状態である）。
 
-したがって409は`startRun`と同型の排他拒否であり、COMP-13が確定済みの`handleStartRunError`（confirm→中止POST→`finishRun`、または復帰のみ）をそのまま流用するのが最も変更範囲が小さい。`startLoop`側に同等のロジックを個別実装する選択肢（2.13.4節が言及する代替案）は採らない。
+当初案は`startRun`と同型の排他拒否とみなし、COMP-13が確定済みの`handleStartRunError`（confirm→中止POST→`finishRun`、または復帰のみ）をそのまま流用していた。しかしレビュー（ラウンド1）で、この流用には`handleStartRunError`の設計前提との不整合があると指摘された。`handleStartRunError`は`startRun`自身のPOST失敗（＝対象Runがまだ存在しない、または`conflictingRunId`側に実体がある）を想定して設計されており、`confirm`が拒否された場合・`conflictingRunId`が欠落していた場合のいずれも`document.getElementById("run-start").disabled = false; document.getElementById("run-cancel").disabled = true;`を無条件に実行してボタンを「未実行」状態へ戻す（2.13.2節）。ところが`startLoop`起点の409では、この`run-start`/`run-cancel`は`startLoop`自身のPOSTとは無関係に、既に稼働中の別の手動Runを表している。`confirm`で拒否された場合（またはcontract違反で`conflictingRunId`が欠落した場合）、手動Runは中止されておらずまだ実際に稼働中であるにもかかわらず、`handleStartRunError`をそのまま呼ぶと`run-cancel`が`disabled=true`にされてしまい、ユーザーはUIから稼働中の手動Runを中止できなくなる（該当Issueを再選択し`selectIssue`の実行中Run検出が`connectRunStream`を再度呼ぶまで復旧しない）。
+
+`handleStartRunError`自体はCOMP-13確定済みの関数であり、シグネチャ・契約を変更しない（本プロジェクトの制約）。呼び出し元で分岐させる方針（`startRun`か`startLoop`かを`handleStartRunError`自身に区別させる案）も、確定済み関数への手入れを伴い変更範囲が広がるため採らない。代わりに、`startLoop`専用の新規関数`handleStartLoopConflictError`を設け、`startLoop`の`catch`ではこちらを呼ぶ（`handleStartRunError`は本節では使用しない）。
+
+```js
+// 入力: err（api()が投げた拡張Error、status/bodyプロパティ付き）, issueId
+// 出力: なし（副作用: 409かつconflictingRunIdありの場合のみconfirm表示。同意時は中止POSTを送信し、
+//        中止POSTが成功した場合に限りfinishRunを呼ぶ。それ以外（409以外・conflictingRunId欠落・
+//        confirm拒否・中止POST失敗）はrun-start/run-cancelの状態を一切変更しない）
+async function handleStartLoopConflictError(err, issueId) {
+  const conflictingRunId = err.status === 409 ? err.body?.conflictingRunId : undefined;
+  if (!conflictingRunId || !confirm("このIssueは実行中です。中止しますか？")) {
+    // 409以外の例外、conflictingRunId欠落（contract違反ケース）、confirm拒否のいずれも、
+    // 稼働中の手動Run（connectRunStreamにより run-start=disabled/run-cancel=enabled に
+    // 設定済み）のボタン状態には一切触れない。handleStartRunErrorと異なりここでは
+    // finishRunを呼ばない（レビュー指摘対応：手動Runがまだ稼働中の可能性がある状態で
+    // 「中止」ボタンを無効化しないため）。
+    return;
+  }
+  try {
+    await api(`/api/runs/${conflictingRunId}/cancel`, { method: "POST" });
+  } catch (cancelErr) {
+    // 中止POST自体が失敗した場合、手動Runはまだ稼働中の可能性が高い（対象Runが
+    // 直前に既に終了していた等の非致命的なケースもあり得るが、いずれにせよ
+    // このフロントエンド側からは稼働中か否かを判別できない）。ここでfinishRunを
+    // 呼んでボタンを「未実行」表示に戻すと、稼働中の手動Runを中止不能にするという
+    // レビュー指摘の再発になるため、finishRunは呼ばずボタン状態を維持する。
+    console.error("中止対象Runの中止処理（cancel POST）に失敗しました:", cancelErr);
+    return;
+  }
+  // 中止POST成功: 手動Runは実際に停止した。connectRunStreamのonerror（2.12.1節手順8）は
+  // finishRunを呼ばず再接続予約のみを行う設計であり、その予約も対象一致ガード
+  // （2.12.1節「setTimeoutコールバックのガード条件」、runId !== currentRunId）により
+  // 破棄される想定であるため、この経路のボタン復帰・Run一覧/Issue一覧の再取得を
+  // 通常の実行完了経路（onerror）に委ねることはできない。finishRunを明示的に呼び、
+  // run-start/run-cancelおよびRun一覧・Issue一覧を正しい「未実行」状態へ更新する。
+  await finishRun(issueId);
+}
+```
+
+**宣言位置**: `handleStartLoopConflictError`は`startLoop`の直前、`cancelRun`（既存、241〜244行目）の直後に配置する（`startLoop`と同じRun操作系のヘルパー群）。COMP-13の`handleStartRunError`（2.13節）とは別関数として独立させ、COMP-13側のファイルには追加しない。
+
+**`finishRun`を明示的に呼ぶ設計判断（`handleStartRunError`との差分）**: `handleStartRunError`は`finally`節で無条件に`finishRun`を呼ぶのに対し、本関数は中止POSTが成功した場合のみ`finishRun`を呼ぶ。中止POST失敗時にも呼んでしまうと、手動Runが実際にはまだ稼働中の可能性がある状況でボタンを「未実行」表示に戻してしまい、本節の指摘（ラウンド1）が問題視した「稼働中のRunを中止不能にする」ケースを再現することになるため、あえて非対称にしている。
 
 **loop-startボタンの無効化範囲を自身のPOST送信中のみに限定する設計判断**: component_design.mdはloop-startボタンの活性制御を明記していない。ここでは、`loop-start`の`disabled`をPOST送信中（数十〜数百ms程度）のみに限定し、Run/ループが実際に実行されている間は無効化し続けない設計とする。
 
 理由: 実行中も`loop-start`を無効化し続ける設計を採ると、Run終了時にこれを再度有効化する処理が別途必要になり、既存の`finishRun`（232〜239行目）を変更しなければならない。しかし`finishRun`はCOMP-12 2.12.1節手順7が「既存`finishRun`実装、232〜239行目は変更しない」と明記済みの共有関数であり、この確定事項を覆さずに済む設計を優先した。
 
-実行中に誤って`loop-start`が再度押されても、`POST /api/issues/{issueId}/loop/start`はバックエンド側の排他制御（`ClaudeRunEngine.StartAsync`の`_activeIssueRuns`、COMP-05）により`409 Conflict`で拒否され（2.11.9節境界値#4）、上記の`handleStartRunError`への委譲経路へ自然に合流する。この経路はCOMP-08 2.8.6節境界値#4が「二重開始そのものを拒否するガードはcomponent_design.mdに規定がなく本節でも追加しない」と明記した設計判断とも整合する（フロント側でも追加の相互排他ガードを設けない点で一貫している）。
+実行中に誤って`loop-start`が再度押されても、`POST /api/issues/{issueId}/loop/start`はバックエンド側の排他制御（`ClaudeRunEngine.StartAsync`の`_activeIssueRuns`、COMP-05）により`409 Conflict`で拒否され（2.11.9節境界値#4）、上記の`handleStartLoopConflictError`への委譲経路へ自然に合流する。この経路はCOMP-08 2.8.6節境界値#4が「二重開始そのものを拒否するガードはcomponent_design.mdに規定がなく本節でも追加しない」と明記した設計判断とも整合する（フロント側でも追加の相互排他ガードを設けない点で一貫している）。この場合`conflictingRunId`は直前に開始されたばかりの自律ループ自身のRunを指すことになるが、`confirm`に同意されれば`handleStartLoopConflictError`はそのRunの中止POSTと`finishRun`呼び出しを行うのみであり、2.14.2節冒頭の想定（手動Runとの排他拒否）と異なりこのケースでは実際に対象Runが中止されるため、`run-start`/`run-cancel`を「未実行」へ戻すこと自体に矛盾はない。
 
 **`startRun`との差分（意図的な非対称性）**: `startRun`（2.13.2節）はPOST送信前に`#run-log`をクリアし`run-start`/`run-cancel`を切り替えるのに対し、`startLoop`はPOST送信前に`#run-log`のクリアや`run-start`/`run-cancel`の切替を行わない。理由は、`startLoop`成功時は必ず`connectRunStream`（COMP-12）を呼び出し、そこで`#run-log`のクリア・`run-start`/`run-cancel`の切替が改めて行われるため（2.12.1節手順4・5）、POST送信前に同じ処理を先取りする必要がないためである。`startRun`側の先取り処理（2.13.2節が踏襲した既存実装由来の重複）まで本節で再現する必要はないと判断した。
 
@@ -2909,10 +2953,12 @@ function renderIssueList() {
 | 3 | Issue編集フォーム保存時、対象Issueの`loopEnabled`が`true`（ループ稼働中に無関係な項目のみ変更して保存、discovered issue） | `loopEnabled: issue.loopEnabled`をペイロードへ含めることで`true`のまま送信され、無関係な編集保存によるループの意図しない停止を防ぐ（2.14.1節「discovered issue」参照） |
 | 4 | `startLoop`のPOSTが`202 Accepted`で成功（正常経路） | `connectRunStream(issueId, run.id)`を呼ぶ。`run-start`/`run-cancel`の切替はconnectRunStream内部で行われる。`loop-start`は即座に再有効化される |
 | 5 | `startLoop`のPOSTが`400 Bad Request`（既定テンプレート未設定、またはIssue不存在。2.11.9節境界値#1・#2） | `alert(err.body?.error)`を表示。`loop-start`のみ再有効化する（`run-start`/`run-cancel`は変更しない） |
-| 6 | `startLoop`のPOSTが`409 Conflict`（同一Issueへの手動Run実行中等との排他拒否。2.11.9節境界値#4） | `handleStartRunError(err, issueId)`（COMP-13既存関数）へ委譲。`conflictingRunId`への同意（`confirm`のOK）で中止POST→`finishRun`、拒否または`conflictingRunId`欠落なら`run-start`/`run-cancel`のみ復帰。いずれの場合も`loop-start`は`startLoop`自身の`catch`ブロックで独立して再有効化される |
-| 7 | `startLoop`のPOSTが`fetch`自体の例外等、`err.status`が`undefined`（境界値、2.13.1節境界値#6相当） | `err.status === 409`が`false`となり、`handleStartRunError`内部でも409以外の分岐（ボタン復帰のみ）へ落ちる。`loop-start`は`startLoop`側で再有効化される |
-| 8 | `issue.loopStopReason`が`null` | Issue詳細画面ヘッダ・Issue一覧行のいずれにもバッジ・インジケータを表示しない |
-| 9 | `issue.loopStopReason`が`"failed"`/`"limit_reached"`/`"no_default_template"` | それぞれ「実行失敗」「連続実行上限到達」「既定テンプレート未設定」の文言でバッジ・インジケータを表示する |
-| 10 | `issue.loopStopReason`が未知の文字列（境界値、将来のサーバー側変更等） | `loopStopReasonLabel`がフォールバック文言`不明な停止理由（{値}）`を返し、バッジ・インジケータに表示する（`undefined`という文字列の表示や例外送出を避ける） |
+| 6 | `startLoop`のPOSTが`409 Conflict`（同一Issueへの手動Run実行中等との排他拒否。2.11.9節境界値#4）で、`conflictingRunId`へ同意（`confirm`のOK）し、`POST /api/runs/{conflictingRunId}/cancel`が成功した場合 | `handleStartLoopConflictError(err, issueId)`（COMP-14新規関数）が`finishRun(issueId)`を呼び、`run-start`/`run-cancel`・Run一覧・Issue一覧を正しい「未実行」状態へ更新する（手動Runは実際に中止済みのため正当な復帰）。`loop-start`は`startLoop`自身の`catch`ブロックで独立して再有効化される |
+| 7 | 同上（409・`conflictingRunId`あり・`confirm`同意）だが`POST /api/runs/{conflictingRunId}/cancel`自体が例外を投げる（境界値、対象Runが直前に既に終了していた等） | `catch (cancelErr)`で`console.error`のみ残し、`finishRun`は呼ばない。`run-start`/`run-cancel`は一切変更しない（手動Runがまだ稼働中の可能性がある状態でボタンを「未実行」表示に戻すレビュー指摘の再発を避けるため。COMP-13の`handleStartRunError`との最大の差分）。`loop-start`は`startLoop`側で独立して再有効化される |
+| 8 | `startLoop`のPOSTが`409 Conflict`で、`confirm`が拒否された場合、または`conflictingRunId`が欠落している場合（境界値、2.13.1節境界値#2相当のcontract違反ケース） | 何もしない（`run-start`/`run-cancel`を一切変更しない）。稼働中の手動Runの「中止」ボタンは有効なまま維持され、レビュー指摘（ラウンド1）が懸念した「実際には稼働中の手動Runを画面から中止できなくなる」事態を防ぐ。`loop-start`は`startLoop`側で独立して再有効化される |
+| 9 | `startLoop`のPOSTが`409`以外の例外、または`fetch`自体の例外等で`err.status`が`undefined`（境界値、2.13.1節境界値#6相当） | `conflictingRunId`は`undefined`となり#8と同じ分岐（何もしない）。この経路が発生する時点でバックエンドは手動Runとの排他拒否（409）を返していない＝この時点で当該Issueに稼働中の手動Runは存在しない（存在すれば409になるため）ため、ボタン状態を変更しなくても不整合は生じない。`loop-start`は`startLoop`側で再有効化される |
+| 10 | `issue.loopStopReason`が`null` | Issue詳細画面ヘッダ・Issue一覧行のいずれにもバッジ・インジケータを表示しない |
+| 11 | `issue.loopStopReason`が`"failed"`/`"limit_reached"`/`"no_default_template"` | それぞれ「実行失敗」「連続実行上限到達」「既定テンプレート未設定」の文言でバッジ・インジケータを表示する |
+| 12 | `issue.loopStopReason`が未知の文字列（境界値、将来のサーバー側変更等） | `loopStopReasonLabel`がフォールバック文言`不明な停止理由（{値}）`を返し、バッジ・インジケータに表示する（`undefined`という文字列の表示や例外送出を避ける） |
 
 対応ID: REQ-17, REQ-18, REQ-19, REQ-20, CON-02, CON-04
