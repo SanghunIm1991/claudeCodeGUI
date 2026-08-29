@@ -2892,7 +2892,7 @@ flowchart TD
     PostResult -->|Yes（202 Accepted）| ResetLoopBtn1["loop-start=enabled"] --> ConnectStream["connectRunStream(issueId, run.id)\n（run-start/run-cancelの切替はここで行われる）"]
     PostResult -->|No（例外throw）| ResetLoopBtn2["loop-start=enabled"]
     ResetLoopBtn2 --> Is400{"err.status === 400?"}
-    Is400 -->|Yes| Alert["alert(err.body?.error)\n（既定テンプレート未設定 or Issue不存在）"]
+    Is400 -->|Yes| Alert["alert(err.body?.error)\n（既定テンプレート未設定 または Issue不存在）"]
     Is400 -->|No| Handle["handleStartLoopConflictError(err, issueId) を呼ぶ"]
     Handle --> Is409{"err.status === 409?"}
     Is409 -->|No| NoOp["何もしない\n（run-start/run-cancelは変更しない）"]
