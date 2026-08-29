@@ -2138,11 +2138,20 @@ app.MapPost("/api/runs/{id}/cancel", async (
 
 **対象ファイル**: `src/ClaudeCodeGui/wwwroot/app.js`
 
-**責務**: component_design.md 3.4節COMP-12（628〜659行目）を参照（シグネチャ・処理内容・対応IDは変更しない）。「runIdを指定してログ表示をやり直す」共通関数`connectRunStream`を実装し、①ページ再読込時の再接続、②接続断からの自動復帰、③新規Run開始時の初回接続の3経路を同じ関数に統合する。既存の`startRun`（173〜209行目）が直接持っていた`EventSource`生成ロジックをここへ集約し、`selectIssue`（62〜68行目）にはRun一覧から実行中Runを検出して`connectRunStream`を呼ぶ判定を追加する。いずれもDOM操作・`EventSource`生成という副作用を伴うため、COMP-06のような純粋関数節ではなく、COMP-11同様「副作用を主とする節」として記載する。
+**責務**: component_design.md 3.4節COMP-12（628〜659行目）を参照（シグネチャ・処理内容・対応IDは変更しない）。「runIdを指定してログ表示をやり直す」共通関数`connectRunStream`を実装し、①ページ再読込時の再接続、②接続断からの自動復帰、③新規Run開始時の初回接続の3経路を同じ関数に統合する。
 
-**ラウンド1レビュー指摘（重大）への対応**: `onerror`ハンドラが予約する`setTimeout`の再帰呼び出しは、component_design.mdの確定仕様（628〜659行目）ではコールバック内容まで含めて固定されているが、確定仕様が定める`connectRunStream`本体のシグネチャ・処理内容自体は変更せず、`setTimeout`コールバック内（再帰呼び出しの直前）に「予約時点のissueId/runIdが現在表示中の対象と一致するか」を確認する1行のガードのみを追加する（2.12.1節手順8、2.12.5節参照）。これはcomponent_design.mdが確定した`connectRunStream`のシグネチャ・対応ID、およびREQ-07（3経路統合）・REQ-08（クリア→全量再描画）・REQ-09（遅延再接続、即座に諦めない）の中核契約のいずれにも抵触しない追加的なガードである。
+既存の`startRun`（173〜209行目）が直接持っていた`EventSource`生成ロジックをここへ集約し、`selectIssue`（62〜68行目）にはRun一覧から実行中Runを検出して`connectRunStream`を呼ぶ判定を追加する。いずれもDOM操作・`EventSource`生成という副作用を伴うため、COMP-06のような純粋関数節ではなく、COMP-11同様「副作用を主とする節」として記載する。
 
-**ラウンド2レビュー指摘（重大）への対応**: ラウンド1のissueId/runId一致ガードには「予約後にIssueを切り替え、`RECONNECT_DELAY_MS`が経過しきる前に同じissueId/runIdへ戻ってくると、偶然の再一致によりガードを素通りしてしまう」残存境界ケースがあった（詳細は2.12.5節「Issue切替時の後始末漏れ」参照）。これに対応するため、`connectRunStream`が呼ばれるたび（`startRun`経由・`selectIssue`の実行中Run検出経由・`onerror`再接続経由のいずれでも）にインクリメントするグローバルなカウンタ`connectionGeneration`を新設し（2.12.4節で宣言）、`onerror`が`setTimeout`を予約する時点の値をクロージャで固定して、発火時に現在値と比較するガードを追加する（2.12.1節手順1・手順8）。ラウンド1のissueId/runId一致ガードは廃止せず、世代一致ガードと**併用**する（両者が防ぐ抜け穴が異なるため。理由は2.12.1節手順8参照）。これもcomponent_design.mdが確定した`connectRunStream`のシグネチャ・対応IDを変更しない追加的なガードである。
+##### 設計経緯（ラウンド1・ラウンド2レビュー指摘への対応、概要）
+
+component_design.mdが確定した`connectRunStream`本体のシグネチャ・処理内容自体（628〜659行目）は変更しない。ラウンド1・ラウンド2のレビューでは、`onerror`ハンドラが予約する`setTimeout`の再帰呼び出しについて、以下2段階のガードを追加した（併用する理由・境界ケースの詳細なトレースは2.12.1節手順8・2.12.5節を参照）。
+
+| ラウンド | 指摘内容（重大） | 追加したガード | 検出する境界ケース |
+|---|---|---|---|
+| 1 | `setTimeout`予約後にissueId/runIdの対象自体が切り替わっても、再接続が無条件に発火してしまう | 対象一致ガード：予約時点のissueId/runIdが現在表示中の対象と一致するかを確認する1行 | Issueを切り替えたまま戻らないケース（2.12.5節参照） |
+| 2 | 対象一致ガードだけでは、Issue切替→復帰でissueId/runIdが偶然再一致するケースを検出できない | 世代一致ガード：`connectRunStream`呼び出しのたびにインクリメントするグローバルカウンタ`connectionGeneration`（2.12.4節で宣言）を、`onerror`予約時点の値でクロージャ固定し、発火時に現在値と比較する | Issue切替後、`RECONNECT_DELAY_MS`が経過しきる前に同じissueId/runIdへ戻るケース（2.12.5節参照） |
+
+いずれのガードも、component_design.mdが確定した`connectRunStream`のシグネチャ・対応ID、およびREQ-07（3経路統合）・REQ-08（クリア→全量再描画）・REQ-09（遅延再接続、即座に諦めない）の中核契約には抵触しない、`setTimeout`コールバック内への追加的な一致確認にとどまる。**ラウンド1の対象一致ガードは廃止せず、ラウンド2の世代一致ガードと併用する**（両者が防ぐ抜け穴が異なるため。詳細は2.12.1節手順8を参照）。
 
 ```js
 // 入力: issueId, runId  出力: なし（副作用としてEventSource接続・DOM更新）
@@ -2191,18 +2200,32 @@ function connectRunStream(issueId, runId) {
 1. `connectionGeneration`をインクリメントし、その値をこの呼び出し内のローカル変数`myGeneration`として固定する（ラウンド2レビュー指摘への対応）。`connectRunStream`は3経路（`startRun`・`selectIssue`の実行中Run検出・`onerror`自身の再接続）のいずれから呼ばれてもこの手順を必ず通るため、`myGeneration`と`connectionGeneration`を比較するだけで「本呼び出しより後に、経路を問わず別の`connectRunStream`呼び出しが発生したか」を判定できる（詳細は手順8、2.12.5節「Issue切替時の後始末漏れ」参照）。
 2. 呼び出し時点で`activeEventSource`が非nullなら`.close()`を呼んでから新規接続に進む（多重接続防止。詳細は2.12.5節）。
 3. `currentRunId`を`runId`に更新する（`cancelRun`・`finishRun`が参照する値。旧`startRun`174〜192行目にあった`currentRunId = run.id;`の代入をここに集約）。
-4. `#run-log`のテキストを空にしてから（REQ-08前段）、新規`EventSource`が返す行を`appendLogLine`で追記していく（REQ-08後段）。この「クリアしてから全体再描画」で二重表示を防げる根拠は、バックエンド`ClaudeRunEngine.StreamLogAsync`（`Services/ClaudeRunEngine.cs:188-210`）が接続のたびに`sentUpTo`を`0`から数え直し、`File.ReadAllLinesAsync`で既存ログ全行を毎回再送信してから`ctx.TailAsync(sentUpTo, ct)`で新規行に続ける実装になっているため（198〜209行目）。つまり「サーバー側が常に全量を送り直す」設計と「クライアント側が受信前に画面をクリアする」設計が対になって初めてREQ-08が成立する。**この対応関係はcomponent_design.md確定仕様のコード自体には明記されていないため、本節で補足として明記する**。
+4. `#run-log`のテキストを空にしてから（REQ-08前段）、新規`EventSource`が返す行を`appendLogLine`で追記していく（REQ-08後段）。「クリアしてから全体再描画」で二重表示を防げる根拠は、下記「REQ-08成立の根拠（補足）」を参照。
 5. `#run-start`を`disabled=true`、`#run-cancel`を`disabled=false`にする（実行中状態のボタン表示。ページ再読込直後の再接続・接続断からの自動復帰のいずれでも同じ表示になる）。
 6. 新規`EventSource`を`` `/api/runs/${runId}/stream` ``へ張り、`activeEventSource`に代入する。
 7. `onmessage`: 受信行を`appendLogLine`で追記する。行に`"type":"result"`という部分文字列が含まれる場合（COMP-06 2.6.2節が定義するJSON構造、モック実行・本番実行いずれも同一契約）、`es.close()`してから`finishRun(issueId)`を呼ぶ（Run終了検出→ボタン状態を戻す→履歴再読込。既存`finishRun`実装、232〜239行目は変更しない）。
-8. `onerror`: `es.close()`してから`setTimeout(...)`で`RECONNECT_DELAY_MS`後に自分自身を再度呼び出す予約をする。**`finishRun`は呼ばない**点が、置き換え対象の既存実装（205〜208行目、後述2.12.3節）との最大の差分である。ボタンは「実行中」表示のまま据え置かれ、ユーザーからは接続断が見えない（REQ-09の意図どおり）。
-   `setTimeout`のコールバックは、`connectRunStream(issueId, runId)`を無条件に呼ぶのではなく、以下2つのガードを**両方とも**満たす場合のみ実際に呼び出す。いずれか一方でも満たさなければ、古い再接続予約を静かに破棄して何もせず終える。
-   - **世代一致ガード**（`myGeneration === connectionGeneration`、ラウンド2レビュー指摘への対応・新規）: 予約後に（経路を問わず）新しい`connectRunStream`呼び出しが1回でも発生していれば`connectionGeneration`は`myGeneration`より大きくなっており、この予約は「もはや最新の接続試行を代表していない」と判定できる。issueId/runIdが偶然一致していても（2.12.1節境界値表#9、2.12.5節参照）この比較は動じない。
-   - **対象一致ガード**（`issueId === selectedIssueId && runId === currentRunId`、ラウンド1レビュー指摘への対応・維持）: 予約時点のissueId/runIdが、現在ユーザーが表示している対象と一致するかを確認する。
+8. `onerror`: `es.close()`してから`setTimeout(...)`で`RECONNECT_DELAY_MS`後に自分自身を再度呼び出す予約をする。**`finishRun`は呼ばない**点が、置き換え対象の既存実装（205〜208行目、後述2.12.3節）との最大の差分である。ボタンは「実行中」表示のまま据え置かれ、ユーザーからは接続断が見えない（REQ-09の意図どおり）。予約したコールバックが実際に再接続を実行するための条件は、下記「`setTimeout`コールバックのガード条件」を参照。
 
-   ガード式: `if (myGeneration !== connectionGeneration || issueId !== selectedIssueId || runId !== currentRunId) return;`
+**REQ-08成立の根拠（補足）**: 「クリアしてから全体再描画」で二重表示を防げる根拠は、バックエンド`ClaudeRunEngine.StreamLogAsync`（`Services/ClaudeRunEngine.cs:188-210`）が接続のたびに`sentUpTo`を`0`から数え直し、`File.ReadAllLinesAsync`で既存ログ全行を毎回再送信してから`ctx.TailAsync(sentUpTo, ct)`で新規行に続ける実装になっているため（198〜209行目）。つまり「サーバー側が常に全量を送り直す」設計と「クライアント側が受信前に画面をクリアする」設計が対になって初めてREQ-08が成立する。**この対応関係はcomponent_design.md確定仕様のコード自体には明記されていないため、本節で補足として明記する**。
 
-   **世代一致ガードだけでは不十分な理由（対象一致ガードを廃止せず併用する理由）**: ユーザーがIssue Aから離脱したまま二度と戻らず、かつ切替先のIssueで新たに`connectRunStream`が呼ばれない場合（例: 切替先Issueに実行中Runがない場合、2.12.2節分岐#3）、`connectionGeneration`は加算されないため世代一致ガードだけでは古い予約を検出できない。この場合は対象一致ガード（`selectedIssueId`がもはやAでない）が古い予約を正しく破棄する。逆に対象一致ガードだけでは、issueId/runIdの偶然の再一致（2.12.1節境界値表#9）を検出できない。両ガードはそれぞれ異なる抜け穴をふさぐため、**一方を他方に置き換えるのではなく併用**する。
+**`setTimeout`コールバックのガード条件**:
+
+`setTimeout`のコールバックは、`connectRunStream(issueId, runId)`を無条件に呼ぶのではなく、以下2つのガードを**両方とも**満たす場合のみ実際に呼び出す。いずれか一方でも満たさなければ、古い再接続予約を静かに破棄して何もせず終える。
+
+- **世代一致ガード**（`myGeneration === connectionGeneration`、ラウンド2レビュー指摘への対応・新規）: 予約後に（経路を問わず）新しい`connectRunStream`呼び出しが1回でも発生していれば`connectionGeneration`は`myGeneration`より大きくなっており、この予約は「もはや最新の接続試行を代表していない」と判定できる。issueId/runIdが偶然一致していても（2.12.1節境界値表#9、2.12.5節参照）この比較は動じない。
+- **対象一致ガード**（`issueId === selectedIssueId && runId === currentRunId`、ラウンド1レビュー指摘への対応・維持）: 予約時点のissueId/runIdが、現在ユーザーが表示している対象と一致するかを確認する。
+
+ガード式: `if (myGeneration !== connectionGeneration || issueId !== selectedIssueId || runId !== currentRunId) return;`
+
+**両ガードを併用する理由（世代一致ガードだけでは不十分な理由）**: ユーザーがIssue Aから離脱したまま二度と戻らず、かつ切替先のIssueで新たに`connectRunStream`が呼ばれない場合（例: 切替先Issueに実行中Runがない場合、2.12.2節分岐#3）、`connectionGeneration`は加算されないため世代一致ガードだけでは古い予約を検出できない。この場合は対象一致ガード（`selectedIssueId`がもはやAでない）が古い予約を正しく破棄する。
+
+逆に対象一致ガードだけでは、issueId/runIdの偶然の再一致（2.12.1節境界値表#9）を検出できない。両ガードはそれぞれ異なる抜け穴をふさぐため、**一方を他方に置き換えるのではなく併用**する。両ガードがそれぞれどのケースを検出するかは下表のとおり（発生手順の詳細なトレースは2.12.5節を参照）。
+
+| ケース | 対象一致ガード（issueId/runId） | 世代一致ガード（generation） | 実際に検出・破棄するガード |
+|---|---|---|---|
+| Issue切替後、二度と戻らず、切替先で新たな`connectRunStream`呼び出しが発生しない（2.12.2節分岐#3） | 不一致→検出できる | `connectionGeneration`が加算されないため一致のまま→検出できない | 対象一致ガードのみ |
+| Issue切替後、`RECONNECT_DELAY_MS`経過前に同じissueId/runIdへ戻り、正規の`connectRunStream`呼び出しが発生する（2.12.1節境界値表#9） | 偶然一致してしまう→検出できない | 正規呼び出しで加算済み→不一致→検出できる | 世代一致ガードのみ |
+| 通常の接続断（対象・世代とも予約時点から変化なし） | 一致（誤って破棄しない） | 一致（誤って破棄しない） | いずれも通過させ再接続を実行する（REQ-09） |
 
 **戻り値**: なし（`void`）。
 
@@ -2269,7 +2292,9 @@ async function selectIssue(id) {
 
 **呼び出し順序についての事前条件**: `connectRunStream`は2.12.1節の事前条件どおり`#run-log`等のDOM要素の存在を前提とするため、`renderIssueDetail(issue, runs)`の**後**に呼ぶ。`renderIssueDetail`は非同期関数ではないため、`await`なしで呼び出し完了後に同期的にDOMへ反映される（`loadArtifactDir`の非同期処理はartifact欄に閉じており、`run-log`等の要素生成には関与しない）。
 
-**`else if (activeEventSource)`分岐の位置づけ（設計判断）**: component_design.mdの確定仕様は「実行中Runがあれば`connectRunStream`を呼ぶ」という順方向の記載のみで、「実行中Runがない場合に何もしない」のか「明示的に後始末する」のかを規定していない。素直に読めば前者（何もしない）だが、その場合、直前に選択していたIssueで再接続ループ（`onerror`→`setTimeout`→再接続）が進行中だと、Issueを切り替えても古い`EventSource`・古い再接続ループが残り続ける（2.12.5節「Issue切替時の後始末漏れ」参照）。この後始末は確定仕様の`connectRunStream`自体を変更するものではなく、`selectIssue`側（component_design.mdが処理内容を確定していない箇所）の追加であるため、本節の裁量で追加する設計判断として明記する。
+**`else if (activeEventSource)`分岐の位置づけ（設計判断）**: component_design.mdの確定仕様は「実行中Runがあれば`connectRunStream`を呼ぶ」という順方向の記載のみで、「実行中Runがない場合に何もしない」のか「明示的に後始末する」のかを規定していない。素直に読めば前者（何もしない）だが、その場合、直前に選択していたIssueで再接続ループ（`onerror`→`setTimeout`→再接続）が進行中だと、Issueを切り替えても古い`EventSource`・古い再接続ループが残り続ける（2.12.5節「Issue切替時の後始末漏れ」参照）。
+
+この後始末は確定仕様の`connectRunStream`自体を変更するものではなく、`selectIssue`側（component_design.mdが処理内容を確定していない箇所）の追加であるため、本節の裁量で追加する設計判断として明記する。
 
 **代表的な境界値・分岐条件**:
 
@@ -2326,7 +2351,9 @@ async function startRun(issueId) {
 
 以上より、**この2箇所の重複はcomponent_design.mdが求める「EventSource生成ロジックの重複排除」とは別種の重複（DOM状態の初期化の重複）であり、意図的に許容する**設計判断として明記する。
 
-**`POST`が例外を投げた場合（`409 Conflict`等）の挙動について（発見した確認事項、既存実装から変わらない範囲）**: `api()`ヘルパー（10〜21行目）は非`2xx`応答時に`Error`を`throw`する。`startRun`はこの例外を`try/catch`していないため、183〜186行目でボタンを`disabled`にした直後に`POST`が例外を投げると、`connectRunStream`まで到達せず、ボタンが「実行中」表示のまま固まる（`run-start`が`disabled`のまま復帰しない）。**この挙動は既存実装（リファクタリング前の173〜209行目）から変わらない**（既存も185〜186行目でボタンを切り替えた後に188行目の`await api(...)`を呼んでおり、同じ経路で同じ問題が起こりうる）。REQ-13（拒否時の中止操作誘導）に対応するUXは別コンポーネント（component_design.mdの確定仕様上、COMP-12の対象外）が担う想定であり、本節ではこの`try/catch`未対応を新規の劣化ではなく既存からの申し送り事項として記録するに留める。
+**`POST`が例外を投げた場合（`409 Conflict`等）の挙動について（発見した確認事項、既存実装から変わらない範囲）**: `api()`ヘルパー（10〜21行目）は非`2xx`応答時に`Error`を`throw`する。`startRun`はこの例外を`try/catch`していないため、183〜186行目でボタンを`disabled`にした直後に`POST`が例外を投げると、`connectRunStream`まで到達せず、ボタンが「実行中」表示のまま固まる（`run-start`が`disabled`のまま復帰しない）。
+
+**この挙動は既存実装（リファクタリング前の173〜209行目）から変わらない**（既存も185〜186行目でボタンを切り替えた後に188行目の`await api(...)`を呼んでおり、同じ経路で同じ問題が起こりうる）。REQ-13（拒否時の中止操作誘導）に対応するUXは別コンポーネント（component_design.mdの確定仕様上、COMP-12の対象外）が担う想定であり、本節ではこの`try/catch`未対応を新規の劣化ではなく既存からの申し送り事項として記録するに留める。
 
 **代表的な境界値・分岐条件**:
 
@@ -2374,6 +2401,30 @@ let connectionGeneration = 0;      // COMP-12: connectRunStream呼び出し世�
 2. `RECONNECT_DELAY_MS`が経過しきる前に、ユーザーがIssue Bへ切り替える（2.12.2節の分岐#3により、その時点の`activeEventSource`＝Issue A用の接続は閉じられる。ただし予約済みの`setTimeout`自体はキャンセルされない）
 3. `RECONNECT_DELAY_MS`経過後、予約されていた再接続がガードなしに発火すると、画面がIssue Bを表示中にもかかわらず`#run-log`をクリアし、Issue A用の`EventSource`を新規に張り、`currentRunId`をIssue AのrunIdへ書き換えてしまう。この状態でユーザーが「中止」ボタンを押すと、画面と無関係なIssue A側のRunを誤って中止してしまう
 
+##### トレース図（ガードなしの場合の不整合とラウンド1対策）
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant ESA as connectRunStream(A, R) 接続中
+    participant Timer as setTimeout予約(issueId=A, runId=R)
+    participant State as 画面状態<br/>(selectedIssueId / currentRunId / activeEventSource)
+
+    ESA->>ESA: ①onerror発火→setTimeout予約
+    User->>State: ②Issue Bへ切替（RECONNECT_DELAY_MS経過前）
+    State->>ESA: activeEventSource.close()（2.12.2節分岐#3、Issue A用接続を閉じる）
+    Note over Timer: 予約自体はキャンセルされない
+    Timer-->>Timer: ③RECONNECT_DELAY_MS経過、予約が発火
+    alt 対象一致ガードなし
+        Timer->>State: connectRunStream(A, R) を無条件に再実行
+        Note over State: Issue B表示中にもかかわらず#run-logをクリアし<br/>Issue A用EventSourceを張り直しcurrentRunId=Rへ書換え<br/>（「中止」操作でIssue A側のRunを誤って中止しうる）
+    else ラウンド1: 対象一致ガードあり
+        Timer->>State: issueId(A) === selectedIssueId(B) ?
+        State-->>Timer: 不一致
+        Note over Timer: `return`し古い再接続予約を破棄。表示中のIssue Bの状態は上書きされない
+    end
+```
+
 **ラウンド1の対策**: 2.12.1節手順8のとおり、`setTimeout`コールバックの先頭で`if (issueId !== selectedIssueId || runId !== currentRunId) return;`によるガード（以下「対象一致ガード」）を追加し、予約時点の対象と現在表示中の対象が一致する場合のみ`connectRunStream`を実際に呼び出す。一致しない場合は何もせず終える（古い再接続予約を静かに破棄する）。`issueId`だけでなく`runId`も併せて比較するのは、同一Issue内で旧Runが中止され新しいRunが開始された場合（Issue自体は切り替わらないが対象Runが変わるケース）にも、旧Runの古い再接続予約が新Runの表示を上書きしないようにするためである。
 
 **ラウンド2レビュー指摘: issueId/runIdの偶然の再一致（残存境界ケース）**: 対象一致ガードは「対象が変わっていないか」しか見ておらず、「その`setTimeout`予約が今なお最新の接続試行を代表しているか」（＝予約後に横入りする接続の発生有無）は区別できない。そのため、Issue Aへ**戻ってくる**操作を挟むと、以下の手順で対象一致ガードだけをすり抜けてしまう残存境界ケースが見つかった。
@@ -2386,11 +2437,44 @@ let connectionGeneration = 0;      // COMP-12: connectRunStream呼び出し世�
 
 **ラウンド2の対策（世代カウンタ方式）**: グローバル変数`connectionGeneration`（2.12.4節）を新設し、`connectRunStream`が呼ばれるたび（`startRun`経由・`selectIssue`の実行中Run検出経由・`onerror`再接続経由のいずれでも、2.12.1節手順1）にインクリメントする。`onerror`が`setTimeout`を予約する際、その時点の`connectionGeneration`の値を`myGeneration`としてクロージャで固定し、`RECONNECT_DELAY_MS`後にコールバックが発火した時点で`myGeneration === connectionGeneration`（以下「世代一致ガード」）を確認する。一致しなければ（＝予約後に、経路を問わず何らかの新しい`connectRunStream`呼び出しが発生している）、issueId/runIdの一致・不一致に関わらず古い予約を無条件に破棄する。
 
+##### トレース図（issueId/runIdの偶然の再一致と、世代一致ガードによる保護）
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Timer as setTimeout予約①(A, R, myGeneration=G0)
+    participant selectIssue as selectIssue(A)
+    participant ES1 as connectRunStream(A, R)（新規呼び出し）
+    participant State as 画面状態<br/>(selectedIssueId / currentRunId / connectionGeneration)
+
+    Timer->>Timer: ①onerror発火→setTimeout予約（myGeneration=G0をクロージャ固定）
+    User->>State: ②Issue Bへ切替（RECONNECT_DELAY_MS経過前）
+    User->>selectIssue: ③Issue Aへ戻る（RECONNECT_DELAY_MS経過前、Run Rはまだrunning）
+    selectIssue->>ES1: 実行中Run検出→正規にconnectRunStream(A, R)を呼ぶ
+    ES1->>State: connectionGeneration++（G0→G1）、selectedIssueId=A、currentRunId=R
+    Note over ES1: ③により新しい正当な接続ES1が確立される
+    Timer-->>Timer: ④RECONNECT_DELAY_MS経過、①の古い予約が発火
+    Timer->>State: 対象一致ガード：issueId(A)===selectedIssueId(A) かつ runId(R)===currentRunId(R) ?
+    State-->>Timer: 偶然どちらも一致（対象一致ガードのみでは素通りしてしまう）
+    alt ラウンド1の対象一致ガードのみ（世代一致ガードなし）
+        Timer->>ES1: connectRunStream(A, R) を再度呼び出してしまう
+        Note over ES1: ⑤ES1を不要に.close()し#run-logを再クリア、ES2を張り直す<br/>（無駄な再接続・ログ欠落リスク。ラウンド2で発見された残存境界ケース）
+    else ラウンド2: 世代一致ガードを併用
+        Timer->>State: 世代一致ガード：myGeneration(G0)===connectionGeneration(G1) ?
+        State-->>Timer: 不一致
+        Note over Timer: `return`し古い予約を破棄。③で確立されたES1は誤って閉じられない
+    end
+```
+
 上記の残存境界ケースにこの対策を当てはめてトレースすると、手順③の`connectRunStream(A, R)`呼び出しで`connectionGeneration`が加算されるため、手順④で古い`setTimeout`コールバックが発火した時点では`myGeneration`（①の予約時点の世代）と`connectionGeneration`（③で加算済みの新しい世代）が一致しなくなっている。したがって世代一致ガードが不一致と判定し、`connectRunStream`は呼ばれず、③で確立された正当なES1は誤って閉じられない（2.12.1節境界値表#9で詳細をトレース）。
 
-**世代一致ガードは対象一致ガードを置き換えるのではなく併用する**: 世代一致ガードだけでは、「Issue Aから離脱したまま二度と戻らず、かつ切替先で新たに`connectRunStream`が呼ばれない」場合（2.12.2節分岐#3、切替先に実行中Runがない場合）を検出できない。この場合`connectionGeneration`は加算されないため、世代一致ガードは（古い予約であるにもかかわらず）一致したままになってしまう。この抜け穴は対象一致ガード（`selectedIssueId`がもはやAでない）がふさぐ。逆に対象一致ガードだけでは今回の残存境界ケース（issueId/runIdの偶然の再一致）を検出できない。両ガードは異なる抜け穴をふさぐため、2.12.1節手順8のガード式は両方をAND結合ではなく`||`で結んだ`return`条件として実装する（`if (myGeneration !== connectionGeneration || issueId !== selectedIssueId || runId !== currentRunId) return;`。すなわちいずれか一方でも不一致なら再接続を破棄する、という意味で「両方一致して初めて再接続を実行する」）。
+**世代一致ガードは対象一致ガードを置き換えるのではなく併用する**: 世代一致ガードだけでは、「Issue Aから離脱したまま二度と戻らず、かつ切替先で新たに`connectRunStream`が呼ばれない」場合（2.12.2節分岐#3、切替先に実行中Runがない場合）を検出できない。この場合`connectionGeneration`は加算されないため、世代一致ガードは（古い予約であるにもかかわらず）一致したままになってしまう。この抜け穴は対象一致ガード（`selectedIssueId`がもはやAでない）がふさぐ。
 
-これらの対策は、component_design.mdが確定する`connectRunStream`のシグネチャ・対応ID（628〜659行目）を変更するものではなく、`setTimeout`コールバックの中身に一致確認のガードを追加するだけの範囲にとどまる。REQ-07（3経路統合）・REQ-08（クリア→全量再描画）・REQ-09（遅延再接続、即座に諦めない）のいずれの中核契約にも抵触しない。REQ-09が求める「サーバー復旧まで諦めず再試行し続ける」挙動は、対象（issueId/runId）・世代のいずれも変わらない通常の接続断シナリオでは引き続きそのまま成立する。
+逆に対象一致ガードだけでは今回の残存境界ケース（issueId/runIdの偶然の再一致）を検出できない。両ガードは異なる抜け穴をふさぐため（両ガードの検出範囲の対応関係は2.12.1節の比較表も参照）、2.12.1節手順8のガード式は両方をAND結合ではなく`||`で結んだ`return`条件として実装する（`if (myGeneration !== connectionGeneration || issueId !== selectedIssueId || runId !== currentRunId) return;`。すなわちいずれか一方でも不一致なら再接続を破棄する、という意味で「両方一致して初めて再接続を実行する」）。
+
+これらの対策は、component_design.mdが確定する`connectRunStream`のシグネチャ・対応ID（628〜659行目）を変更するものではなく、`setTimeout`コールバックの中身に一致確認のガードを追加するだけの範囲にとどまる。REQ-07（3経路統合）・REQ-08（クリア→全量再描画）・REQ-09（遅延再接続、即座に諦めない）のいずれの中核契約にも抵触しない。
+
+REQ-09が求める「サーバー復旧まで諦めず再試行し続ける」挙動は、対象（issueId/runId）・世代のいずれも変わらない通常の接続断シナリオでは引き続きそのまま成立する。
 
 **代表的な境界値・分岐条件**:
 
