@@ -62,9 +62,9 @@
 | COMP-05 ClaudeRunEngine 拡張 | `StartAsync`（シグネチャ変更）, `ExecuteAsync`（`isMock`引数追加・既存メソッドの変更）, `CancelAsync`（既存メソッドの変更）, `RunContext.IsCanceled`（既存ネスト型へのフィールド追加、独立関数なし）, `RunCompleted`イベント（新規） |
 | COMP-06 MockRunGenerator（新規） | `ShouldUseMock`（新規・純粋関数）, `GenerateLines`（新規・純粋関数） |
 | COMP-07 TargetPathValidator（新規） | `IsWithinAllowedRoots`（新規・純粋関数）, `IsAllowed`（新規・薄いラッパー） |
-| COMP-08 LoopEngine（新規） | |
-| COMP-09 RetentionPruner（新規） | |
-| COMP-10 OrphanSweepService（新規） | |
+| COMP-08 LoopEngine（新規） | `Evaluate`（新規・静的純粋関数）, `GetNextStage`（新規・静的純粋関数）, `ResolveDefaultTemplate`（新規・静的純粋関数）, `HandleRunCompletedAsync`（新規・副作用あり）, `StartLoopAsync`（新規・副作用あり）, `StopLoopAsync`（新規・副作用あり） |
+| COMP-09 RetentionPruner（新規） | `SelectRunsToPrune`（新規・静的純粋関数）, `PruneAsync`（新規・副作用あり） |
+| COMP-10 OrphanSweepService（新規） | `OrphanDetection.Detect`（新規・静的純粋関数）, `OrphanSweepService.SweepAsync`（新規・副作用あり） |
 | COMP-11 Program.cs エンドポイント拡張 | |
 | COMP-12 SSE自動再接続・実行中Run検出（app.js） | |
 | COMP-13 排他制御拒否時のUX誘導（app.js） | |
