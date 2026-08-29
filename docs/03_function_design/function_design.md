@@ -2622,7 +2622,7 @@ async function handleStartRunError(err, issueId) {
 
 当初案はこの構造のまま`finally`のみで`await api(cancel)`を囲んでいたため、cancel POSTが失敗すると`finishRun`の成否に関わらず`handleStartRunError`自身が必ず例外を再送出（reject）してしまい、その伝播先である`startRun`側の`catch (err) { await handleStartRunError(err, issueId); return; }`（2569〜2572行目）にはこれを受け止める`try/catch`が存在しないため、`startRun`自身の戻り値Promiseが未処理rejection（unhandled rejection）になる帰結を招いていた。
 
-この対応として、cancel POST呼び出しを`try/catch(cancelErr)/finally`に変更し、cancel POST自体の失敗は`catch (cancelErr)`でこの関数内に留め、`console.error`で診断ログのみ残して外へは伝播させない方針（本節冒頭の選択肢(a)）を採る。理由は以下の2点:
+この対応として、cancel POST呼び出しを`try/catch(cancelErr)/finally`に変更し、cancel POST自体の失敗は`catch (cancelErr)`でこの関数内に留め、`console.error`で診断ログのみ残して外へは伝播させない方針（選択肢(a)）を採る。理由は以下の2点:
 - 直上のコメント「出力: なし（副作用のみ）」というこの関数の既存の契約と整合する。呼び出し元`startRun`に手を加える方針（選択肢(b)、`startRun`側に`try/catch`を追加してunhandled rejectionを防ぐ）も可能だが、`startRun`は2.12.3節が確定済みの構成であり、本節（COMP-13）の対応範囲をこの関数内に閉じることができる(a)の方が変更範囲が小さい。
 - ボタン復帰・Run一覧再取得は`finally`内の`finishRun(issueId)`呼び出しにより、cancel POSTの成否と無関係に継続される（COMP-12申し送りバグの再発防止という本節の主目的は変わらず達成される）。cancel POST失敗は「対象Runが直前に既に終了していた」等の非致命的なケースが主であり、ユーザーへは`confirm`で表示した中止の意図に対する結果を再度知らせる追加UIまでは要求されていない（component_design.mdは`confirm`→中止POSTへの誘導のみを規定）。
 
