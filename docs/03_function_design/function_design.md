@@ -745,7 +745,7 @@ flowchart TD
     Start(["IsWithinAllowedRoots(targetPath, allowedRoots)"]) --> Empty{"allowedRoots.Count == 0"}
     Empty -->|true| True1["true を返す\n（制限なし。targetPathの正規化も行わない。#1）"]
     Empty -->|false| Normalize["normalizedTarget = TrimEndingDirectorySeparator(GetFullPath(targetPath))\n※不正な文字列の場合はここで ArgumentException（#11）"]
-    Normalize --> PickRoot["allowedRootsの各rootについて:\nnormalizedRoot = TrimEndingDirectorySeparator(GetFullPath(root))"]
+    Normalize --> PickRoot["allowedRootsの各rootについて:\nnormalizedRoot = TrimEndingDirectorySeparator(GetFullPath(root))\n※不正な文字列の場合はここで ArgumentException"]
     PickRoot --> Eq{"normalizedTarget が normalizedRoot と一致\n（OrdinalIgnoreCase）"}
     Eq -->|true| True2["true を返す\n（許可ルート自身に一致。#2・#8）"]
     Eq -->|false| Under{"normalizedTarget が normalizedRoot + セパレータ で始まる\n（OrdinalIgnoreCase）"}
