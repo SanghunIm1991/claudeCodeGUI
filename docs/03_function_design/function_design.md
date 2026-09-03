@@ -41,5 +41,5 @@
 | [COMP-13](COMP-13.md) 排他制御拒否時のUX誘導 | `src/ClaudeCodeGui/wwwroot/app.js` | 完了 |
 | [COMP-14](COMP-14.md) 自律ループ操作UI | `src/ClaudeCodeGui/wwwroot/app.js`, `styles.css` | 完了 |
 | [COMP-15](COMP-15.md) GUI配置の改善 | `src/ClaudeCodeGui/wwwroot/app.js`, `styles.css` | 完了 |
-| COMP-16 テンプレート既定フラグの編集UI | `wwwroot/app.js`, `wwwroot/index.html` | 未着手 |
+| [COMP-16](COMP-16.md) テンプレート既定フラグの編集UI | `wwwroot/app.js`, `wwwroot/index.html` | 完了 |
 | COMP-17 `ClaudeCodeGui.Tests`（新規プロジェクト） | `src/ClaudeCodeGui.Tests/` | 未着手 |
