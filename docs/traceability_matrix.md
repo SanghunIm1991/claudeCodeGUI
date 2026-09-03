@@ -71,7 +71,7 @@
 | COMP-14 自律ループ操作UI（app.js, styles.css） | `permissionModeOptionsHtml`（新規）, `loopStopReasonLabel`（新規）, `startLoop`（新規）, `handleStartLoopConflictError`（新規、ラウンド1レビュー指摘対応）, `renderIssueDetail`（既存関数の変更・`#e-default-permission-mode`セレクト追加、ループ停止バッジ追加、`loop-start`ボタン追加）, `issue-edit-form`submitハンドラ（既存関数の変更・`loopEnabled`/`defaultPermissionMode`をPUTペイロードへ追加）, `renderIssueList`（既存関数の変更・ループ停止インジケータ追加） |
 | COMP-15 GUI配置の改善（app.js, styles.css） | `renderIssueDetail`（既存関数の変更・`#run-log`初期HTMLへ`.log-view-placeholder`要素追加、REQ-04）, `--browser-panel-height`（新規CSS変数、`:root`）, `.artifact-tree`（既存ルールの変更・`max-height`をCSS変数化）, `.artifact-editor textarea`（既存ルールの変更・`height`をCSS変数化、REQ-05） |
 | COMP-16 テンプレート既定フラグの編集UI（app.js, index.html） | `#template-form`（既存フォームの変更・`#template-is-default`チェックボックス追加）, `template-form`submitハンドラ（既存関数の変更・`isDefaultForStage`をPOSTペイロードへ追加）, `renderTemplateDetail`（既存関数の変更・`#te-is-default`チェックボックス追加、`isDefaultForStage`をPUTペイロードへ追加） |
-| COMP-17 ClaudeCodeGui.Tests（新規プロジェクト） | |
+| COMP-17 ClaudeCodeGui.Tests（新規プロジェクト） | `Unit/ClaudeRunEngineTests.cs`, `Unit/MockRunGeneratorTests.cs`, `Unit/TargetPathValidatorTests.cs`, `Unit/LoopEngineTests.cs`, `Unit/RetentionPrunerTests.cs`, `Unit/OrphanDetectionTests.cs`, `Unit/ArtifactServiceTests.cs`, `Unit/PromptTemplateDefaultResolverTests.cs`（発見した追加対象）, `Unit/IssueUpdateValidatorTests.cs`（発見した追加対象）, `Integration/IssueEndpointsTests.cs`, `Integration/RunEndpointsTests.cs`, `Integration/LoopEndpointsTests.cs`, `Integration/TemplateEndpointsTests.cs` |
 
 ## ③関数×テスト
 
