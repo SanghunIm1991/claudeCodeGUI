@@ -714,8 +714,8 @@ src/ClaudeCodeGui.Tests/
     RetentionPrunerTests.cs       SelectRunsToPrune
     OrphanDetectionTests.cs       Detect（安全弁ケース含む）
     ArtifactServiceTests.cs       ResolveWithinRoot（既存ロジック、未整備だったため追加）
-    PromptTemplateDefaultResolverTests.cs  ResolveDemotions（COMP-03、後日追記。下記注記参照）
-    IssueUpdateValidatorTests.cs  IsKnownStage, IsKnownPermissionMode（COMP-11、後日追記。下記注記参照）
+    PromptTemplateDefaultResolverTests.cs   ResolveDemotions（COMP-03、後日追記。下記注記参照）
+    IssueUpdateValidatorTests.cs           IsKnownStage, IsKnownPermissionMode（COMP-11、後日追記。下記注記参照）
   Integration/
     IssueEndpointsTests.cs        Issue CRUD + TargetPathValidator連携
     RunEndpointsTests.cs          Run開始（モックモードで実行）・SSE配信・排他拒否(409)
