@@ -42,6 +42,8 @@
 
 各契機とプレースホルダの状態遷移の関係を図示すると以下のとおり（`#`は下表の行番号に対応）。詳細な条件・根拠は表を参照。
 
+##### プレースホルダが消えるタイミング（フロー図）
+
 ```mermaid
 flowchart TD
     Sel["Issueを選択（selectIssue）"] --> Running{"status===running\nのRunがある?"}
