@@ -15,8 +15,11 @@
 
 - `index.html`の`#template-form`（既存46〜61行目、`#template-stage`・`#template-name`・`#template-body`・送信ボタンで構成）が現状の記述のままであること。
 - `app.js`の`renderTemplateDetail`（既存338〜371行目）が`#template-edit-form`（342〜350行目、`#te-stage`・`#te-name`・`#te-body`・送信ボタン群で構成）を`innerHTML`で構築し、直後（352〜370行目）で`#template-edit-form`のsubmitイベント・`#te-delete`のclickイベントを登録済みであること。
-- COMP-11（2.11.6節）が確定済みの`SaveTemplateRequest(string Name, string Stage, string Body, bool IsDefaultForStage)`（POST/PUT共通のリクエストDTO）が実装済みであること。`IsDefaultForStage`は非nullable `bool`であり、リクエストJSONに当該キーが存在しない場合`System.Text.Json`は既定値`false`として黙って埋める（COMP-14 2.14.1節「discovered issue」と同種の`System.Text.Json`既定値埋めの挙動）。本節はこれを踏まえ、作成・編集いずれの送信ハンドラでも`isDefaultForStage`キーを必ずペイロードへ含める（2.16.3節で確認）。
-- `GET /api/templates`・`GET /api/templates/{id}`のレスポンスは`PromptTemplate`オブジェクトをそのまま返す実装であり（COMP-11、DTOによる投影なし）、`IsDefaultForStage`プロパティは既定のcamelCase命名規則により`isDefaultForStage`としてレスポンスJSONへ含まれる。`selectTemplate`（既存331〜336行目）はテンプレート選択のたびに`api(`/api/templates/${id}`)`で最新値を取得するため、`renderTemplateDetail`に渡される`t.isDefaultForStage`は常にサーバー側の最新値である。
+- COMP-11（2.11.6節）が確定済みの`SaveTemplateRequest(string Name, string Stage, string Body, bool IsDefaultForStage)`（POST/PUT共通のリクエストDTO）が実装済みであること。
+  - `IsDefaultForStage`は非nullable `bool`であり、リクエストJSONに当該キーが存在しない場合`System.Text.Json`は既定値`false`として黙って埋める（COMP-14 2.14.1節「discovered issue」と同種の`System.Text.Json`既定値埋めの挙動）。
+  - 本節はこれを踏まえ、作成・編集いずれの送信ハンドラでも`isDefaultForStage`キーを必ずペイロードへ含める（2.16.3節で確認）。
+- `GET /api/templates`・`GET /api/templates/{id}`のレスポンスは`PromptTemplate`オブジェクトをそのまま返す実装であり（COMP-11、DTOによる投影なし）、`IsDefaultForStage`プロパティは既定のcamelCase命名規則により`isDefaultForStage`としてレスポンスJSONへ含まれる。
+  - `selectTemplate`（既存331〜336行目）はテンプレート選択のたびに`api(`/api/templates/${id}`)`で最新値を取得するため、`renderTemplateDetail`に渡される`t.isDefaultForStage`は常にサーバー側の最新値である。
 - `api()`（既存10〜21行目）・`escapeAttr`（既存391〜393行目）・`STAGES`（既存1〜7行目）は本節で変更しない。
 
 #### 2.16.1 `#template-form`（新規作成フォーム）へのチェックボックス追加とPOSTペイロードへの反映
@@ -104,13 +107,22 @@ function renderTemplateDetail(t) {
 
 #### 2.16.3 discovered issue確認: COMP-14の`loopEnabled`事例との比較（対応不要の結論）
 
-COMP-14 2.14.1節は、チェックボックス等のUI要素を追加せず「クロージャに保持された現在値」（`issue.loopEnabled`）をそのままPUTペイロードへ含める設計を採ったため、フォーム表示中にサーバー側の値が変化していた場合に古い値を誤って送信してしまう限界（同節「この対応の限界」）を抱えていた。COMP-16でも同種の見落とし（チェックボックスの値をペイロードに含め忘れる、または古い値を送ってしまう）がないか確認した。
+COMP-14 2.14.1節は、チェックボックス等のUI要素を追加せず「クロージャに保持された現在値」（`issue.loopEnabled`）をそのままPUTペイロードへ含める設計を採ったため、フォーム表示中にサーバー側の値が変化していた場合に古い値を誤って送信してしまう限界（同節「この対応の限界」）を抱えていた。
 
-- **含め忘れの有無**: 2.16.1節・2.16.2節のとおり、POST・PUT双方の送信ハンドラで`isDefaultForStage`キーを明示的にペイロードへ含めている。含め忘れた場合は`SaveTemplateRequest.IsDefaultForStage`が既定値`false`として送信され、意図せず既定フラグが解除される、またはチェックを入れたつもりが反映されない不具合になるところであった（事前条件節参照）。
-- **古い値を送ってしまう経路の有無**: COMP-14の`loopEnabled`はDOM上にUI要素を持たず`issue`オブジェクト（クロージャ変数、`selectIssue`実行時点のスナップショット）から値を読んでいたためスナップネッサの陳腐化が問題になった。COMP-16の`isDefaultForStage`は、作成・編集いずれのフォームでも実際の`<input type="checkbox">`要素（`#template-is-default`・`#te-is-default`）としてDOMへ存在し、送信ハンドラは`document.getElementById(...).checked`というDOM要素の現在値を都度読み取る。これは`#te-stage`・`#te-name`・`#te-body`という既存3項目と全く同じ「フォーム要素の現在値をそのまま読む」パターンであり、クロージャ変数を経由する特別な扱いを一切必要としない。したがって、COMP-14が抱えていた「表示中にサーバー側の値が変化した場合に取り残される」種類の陳腐化は、そもそも本節の設計では発生しない（チェックボックス自体が編集対象そのものであるため）。
-- **結論**: COMP-14のような追加対応（クロージャ値の明示送信、限界の申し送り）は不要である。理由はcomponent_design.mdの確定方針どおりチェックボックスという実UI要素を素直に追加したことにより、COMP-14が直面した「UI要素を追加せずクロージャ値で代替する」という設計上の妥協自体が発生しないためである。
+COMP-16でも同種の見落とし（チェックボックスの値をペイロードに含め忘れる、または古い値を送ってしまう）がないか、以下の観点で確認した。
 
-**編集フォームを開いたまま他テンプレートの既定状態が変化した場合の表示追随（申し送り、対応不要）**: あるテンプレートAの編集フォームを開いたまま、同一Stageの別テンプレートBを既定にする保存を行った場合、COMP-03 2.3.2節の一意性解決によりサーバー側ではAの`IsDefaultForStage`が`false`へ降格されるが、Aの編集フォーム（`#te-is-default`のチェック状態）はこの降格を購読しておらず、ユーザーが`selectTemplate(A.id)`を再実行（一覧からAを再選択）するまで画面上は古い状態（チェック済み）のまま残る。component_design.mdの確定方針（「一覧再取得時に他テンプレートのisDefaultForStageが自動的に更新されて見える」）は`selectTemplate`による再取得を前提としており、開きっぱなしの編集フォームへのリアルタイム反映までは要求していない。COMP-12/14いずれもポーリング機構を持たない本UI全般の設計上の限界（COMP-14 2.14.1節「この対応の限界」と同種）であり、COMP-16単体で解消すべき対象ではないため追加対応は行わない。
+| 観点 | 確認内容 |
+|---|---|
+| 含め忘れの有無 | 2.16.1節・2.16.2節のとおり、POST・PUT双方の送信ハンドラで`isDefaultForStage`キーを明示的にペイロードへ含めている。含め忘れた場合は`SaveTemplateRequest.IsDefaultForStage`が既定値`false`として送信され、意図せず既定フラグが解除される、またはチェックを入れたつもりが反映されない不具合になるところであった（事前条件節参照） |
+| 古い値を送ってしまう経路の有無（COMP-14との比較） | COMP-14の`loopEnabled`はDOM上にUI要素を持たず`issue`オブジェクト（クロージャ変数、`selectIssue`実行時点のスナップショット）から値を読んでいたためスナップショットの陳腐化が問題になった。COMP-16の`isDefaultForStage`は、作成・編集いずれのフォームでも実際の`<input type="checkbox">`要素（`#template-is-default`・`#te-is-default`）としてDOMへ存在し、送信ハンドラは`document.getElementById(...).checked`というDOM要素の現在値を都度読み取る。これは`#te-stage`・`#te-name`・`#te-body`という既存3項目と全く同じ「フォーム要素の現在値をそのまま読む」パターンであり、クロージャ変数を経由する特別な扱いを一切必要としない。したがって、COMP-14が抱えていた「表示中にサーバー側の値が変化した場合に取り残される」種類の陳腐化は、そもそも本節の設計では発生しない（チェックボックス自体が編集対象そのものであるため） |
+
+**結論**: COMP-14のような追加対応（クロージャ値の明示送信、限界の申し送り）は不要である。理由はcomponent_design.mdの確定方針どおりチェックボックスという実UI要素を素直に追加したことにより、COMP-14が直面した「UI要素を追加せずクロージャ値で代替する」という設計上の妥協自体が発生しないためである。
+
+**編集フォームを開いたまま他テンプレートの既定状態が変化した場合の表示追随（申し送り、対応不要）**
+
+あるテンプレートAの編集フォームを開いたまま、同一Stageの別テンプレートBを既定にする保存を行った場合、COMP-03 2.3.2節の一意性解決によりサーバー側ではAの`IsDefaultForStage`が`false`へ降格されるが、Aの編集フォーム（`#te-is-default`のチェック状態）はこの降格を購読しておらず、ユーザーが`selectTemplate(A.id)`を再実行（一覧からAを再選択）するまで画面上は古い状態（チェック済み）のまま残る。
+
+component_design.mdの確定方針（「一覧再取得時に他テンプレートのisDefaultForStageが自動的に更新されて見える」）は`selectTemplate`による再取得を前提としており、開きっぱなしの編集フォームへのリアルタイム反映までは要求していない。COMP-12/14いずれもポーリング機構を持たない本UI全般の設計上の限界（COMP-14 2.14.1節「この対応の限界」と同種）であり、COMP-16単体で解消すべき対象ではないため追加対応は行わない。
 
 **代表的な境界値・分岐条件**:
 
