@@ -2,7 +2,7 @@
 
 **対象ファイル**: `src/ClaudeCodeGui.Tests/`（新規プロジェクト一式）
 
-**責務**（component_design.md 698〜730行目、変更しない）: xUnitベースの単体・結合テストプロジェクトを追加する（REQ-26）。`test-strategy`スキルの3層構成（単体/結合/GUI）のうち、単体・結合の2層を自動テストとして整備する（GUIはCON-09により対象外）。プロジェクト構成（`Unit/`・`Integration/`の各ファイルと対象関数の対応）・単体テスト方針（NFR-03）・結合テスト方針（NFR-04）はcomponent_design.md 706〜728行目で確定済みであり、本節はこれをそのまま踏襲した上で、関数設計工程として必要な「プロジェクトの配線」レベルの詳細（csproj構成、テスト用一時ディレクトリの実現方法、`Program`クラスのアクセシビリティ等）を具体化する。
+**責務**（component_design.md 698〜732行目、変更しない）: xUnitベースの単体・結合テストプロジェクトを追加する（REQ-26）。`test-strategy`スキルの3層構成（単体/結合/GUI）のうち、単体・結合の2層を自動テストとして整備する（GUIはCON-09により対象外）。プロジェクト構成（`Unit/`・`Integration/`の各ファイルと対象関数の対応）・単体テスト方針（NFR-03）・結合テスト方針（NFR-04）はcomponent_design.md 708〜730行目で確定済みであり、本節はこれをそのまま踏襲した上で、関数設計工程として必要な「プロジェクトの配線」レベルの詳細（csproj構成、テスト用一時ディレクトリの実現方法、`Program`クラスのアクセシビリティ等）を具体化する。
 
 ## 2.17.0 本コンポーネントの役割とテスト工程（`docs/04_test/`）との境界
 
@@ -47,7 +47,7 @@
 | `IsPackable` | `false` | テスト専用プロジェクトのためNuGetパッケージ化は不要（標準的なテストプロジェクトの既定設定） |
 | `ProjectReference` | `src/ClaudeCodeGui/ClaudeCodeGui.csproj`への相対参照 | Unit/Integration双方のテストが`ClaudeCodeGui`名前空間の型（`Services/`配下の各クラス、`Program`）を直接参照するため必須 |
 
-**フォルダ構成**（component_design.md 706〜722行目のとおり、以下の階層で作成する）:
+**フォルダ構成**（component_design.md 708〜724行目のとおり、以下の階層で作成する）:
 
 ```
 src/ClaudeCodeGui.Tests/
@@ -203,6 +203,6 @@ public class ClaudeCodeGuiWebApplicationFactory : WebApplicationFactory<Program>
 
 ## 2.17.9 単体テスト方針・結合テスト方針の確認まとめ
 
-component_design.md 724〜728行目が確定させた単体テスト方針（NFR-03）・結合テスト方針（NFR-04）・GUIテスト方針（CON-09）は、上記2.17.4節「discovered gap」による2ファイルの追加を除き、内容の変更なくそのまま踏襲する。GUIテストは引き続き自動テストとして整備せず、正常系のスクリーンショット確認は実装完了後にAIエージェントへ別途依頼する運用とする（component_design.md 728行目、変更なし）。
+component_design.md 726〜730行目が確定させた単体テスト方針（NFR-03）・結合テスト方針（NFR-04）・GUIテスト方針（CON-09）は、上記2.17.4節「discovered gap」による2ファイルの追加を除き、内容の変更なくそのまま踏襲する。GUIテストは引き続き自動テストとして整備せず、正常系のスクリーンショット確認は実装完了後にAIエージェントへ別途依頼する運用とする（component_design.md 732行目、変更なし）。
 
 対応ID: NFR-03, NFR-04, REQ-26, CON-09
