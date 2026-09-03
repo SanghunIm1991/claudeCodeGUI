@@ -714,6 +714,8 @@ src/ClaudeCodeGui.Tests/
     RetentionPrunerTests.cs       SelectRunsToPrune
     OrphanDetectionTests.cs       Detect（安全弁ケース含む）
     ArtifactServiceTests.cs       ResolveWithinRoot（既存ロジック、未整備だったため追加）
+    PromptTemplateDefaultResolverTests.cs  ResolveDemotions（COMP-03、後日追記。下記注記参照）
+    IssueUpdateValidatorTests.cs  IsKnownStage, IsKnownPermissionMode（COMP-11、後日追記。下記注記参照）
   Integration/
     IssueEndpointsTests.cs        Issue CRUD + TargetPathValidator連携
     RunEndpointsTests.cs          Run開始（モックモードで実行）・SSE配信・排他拒否(409)
@@ -721,7 +723,9 @@ src/ClaudeCodeGui.Tests/
     TemplateEndpointsTests.cs     既定テンプレート一意性
 ```
 
-**単体テスト方針（NFR-03）**: COMP-05〜COMP-10で切り出した静的・純粋関数（`BuildPrompt`、`ArtifactService.ResolveWithinRoot`、`MockRunGenerator.ShouldUseMock`/`GenerateLines`、`TargetPathValidator.IsWithinAllowedRoots`、`LoopEngine.Evaluate`/`GetNextStage`/`ResolveDefaultTemplate`、`RetentionPruner.SelectRunsToPrune`、`OrphanDetection.Detect`）を優先してカバーする。
+> 注記（2026-09-03追記）: `PromptTemplateDefaultResolverTests.cs`（`ResolveDemotions`）・`IssueUpdateValidatorTests.cs`（`IsKnownStage`, `IsKnownPermissionMode`）の2ファイルは、本節の初版執筆時点ではCOMP-03・COMP-11の詳細な関数設計がまだ確定していなかったため一覧から漏れていた。その後、COMP-03（`docs/03_function_design/COMP-03.md` 2.3.2節）で`PromptTemplateDefaultResolver.ResolveDemotions`が、COMP-11（`docs/03_function_design/COMP-11.md`）で`IssueUpdateValidator.IsKnownStage`/`IsKnownPermissionMode`が静的・純粋関数として確定したことを受け、NFR-03の対象として本節に追記した。
+
+**単体テスト方針（NFR-03）**: COMP-05〜COMP-10で切り出した静的・純粋関数（`BuildPrompt`、`ArtifactService.ResolveWithinRoot`、`MockRunGenerator.ShouldUseMock`/`GenerateLines`、`TargetPathValidator.IsWithinAllowedRoots`、`LoopEngine.Evaluate`/`GetNextStage`/`ResolveDefaultTemplate`、`RetentionPruner.SelectRunsToPrune`、`OrphanDetection.Detect`、`PromptTemplateDefaultResolver.ResolveDemotions`、`IssueUpdateValidator.IsKnownStage`/`IsKnownPermissionMode`）を優先してカバーする。
 
 **結合テスト方針（NFR-04）**: `WebApplicationFactory<Program>`（または同等の手段）を用い、`appsettings`で`ClaudeCli:MockMode=true`を指定した実インスタンスに対してHTTPリクエストを送る。`ClaudeRunEngine`・`ArtifactService`・`JsonFileStore<T>`はモックに置き換えず実際の呼び出し関係のまま検証する（モックモードにより実CLI起動そのものは回避しつつ、アプリ内部の連携はモックしない、という両立）。テスト用の`runtime-data`は一時ディレクトリを都度使用し、実データと分離する。
 
