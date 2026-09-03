@@ -101,16 +101,16 @@ var dataRoot = builder.Configuration["DataRoot"]
 
 この変更はCLAUDE.md品質方針が求める「軽量な型・入力ガード等の実コード修正をデフォルトの対応として提案する」に沿った、既存動作を変えない後方互換の1行差分であり、COMP-11の確定済みDI登録・エンドポイント定義への変更は伴わない（`dataRoot`の値を後続で参照する`Program.cs`10〜14・28〜35行目のコードはそのまま）。
 
-## 2.17.4 discovered gap: 追加すべき単体テストファイル
+## 2.17.4 discovered gap: 追加すべき単体テストファイル（発見・上流ドキュメントへ反映済み）
 
-component_design.md 706〜722行目が確定させたUnit/配下7ファイルの単体テスト方針（724行目）は「COMP-05〜COMP-10で切り出した静的・純粋関数」と明記しているが、これはCOMP-17自体の当初のコンポーネント設計時点（COMP-11着手前）を反映したものであり、その後確定したCOMP-03・COMP-11にも同種の静的純粋関数が存在することを確認した。
+component_design.md 706〜724行目は現在Unit/配下9ファイルを確定させているが、これはCOMP-17自体の当初のコンポーネント設計時点（COMP-11着手前）ではUnit/配下7ファイルであり、当時の単体テスト方針は「COMP-05〜COMP-10で切り出した静的・純粋関数」と明記していた。本節ではその後確定したCOMP-03・COMP-11にも同種の静的純粋関数が存在することを発見した。
 
 | 発見した関数 | 所属 | 性質 | 対応 |
 |---|---|---|---|
 | `PromptTemplateDefaultResolver.ResolveDemotions(IReadOnlyList<PromptTemplate> allTemplates, PromptTemplate candidate)` | COMP-03 2.3.2節 | 純粋関数（ストア等への副作用なし、NFR-03明記） | `Unit/PromptTemplateDefaultResolverTests.cs`を新規追加 |
 | `IssueUpdateValidator.IsKnownStage(string? stage)` / `IsKnownPermissionMode(string? mode)` | COMP-11 2.11.3節 | 純粋関数（同上、NFR-03明記） | `Unit/IssueUpdateValidatorTests.cs`を新規追加 |
 
-いずれもNFR-03「静的・純粋関数を優先してカバーする」という単体テスト方針そのものが要求する対象であり、component_design.mdの確定内容（テストプロジェクトが単体・結合の2層を整備するという基本構成）を変更するものではなく、対象関数一覧を実際に完了済みのCOMP-03・COMP-11の内容と整合させる補完である。境界値・分岐条件はそれぞれCOMP-03 2.3.2節「代表的な境界値・分岐条件」表、COMP-11 2.11.3節「代表的な境界値・分岐条件」表（#1〜8）にテストケース設計へ転用可能な粒度で既に記載済みであり、本節では重複記載しない。
+いずれもNFR-03「静的・純粋関数を優先してカバーする」という単体テスト方針そのものが要求する対象である。この発見を受け、独立レビューにて「本来は上流ドキュメント側を先に改訂すべき設計判断」と判定されたため、component_design.md 3.6節を事後改訂し（コミット`ea71a51`）、Unit/配下を正式に9ファイル（本表の`PromptTemplateDefaultResolverTests.cs`・`IssueUpdateValidatorTests.cs`を含む）として確定させた（component_design.md 706〜724行目のプロジェクト構成、および726行目の注記を参照）。したがって本節はcomponent_design.mdの確定内容と矛盾するものではなく、両ドキュメントは現時点で整合している。境界値・分岐条件はそれぞれCOMP-03 2.3.2節「代表的な境界値・分岐条件」表、COMP-11 2.11.3節「代表的な境界値・分岐条件」表（#1〜8）にテストケース設計へ転用可能な粒度で既に記載済みであり、本節では重複記載しない。
 
 **追加しない判断をした関数（参考）**: `TemplateSeeder.SeedDefaultsAsync`（COMP-03 2.3.3節、既存関数の変更）は副作用（`store.GetAllAsync`/`SaveAsync`）を伴い純粋関数ではないため、NFR-03の単体テスト優先対象には該当しない。この関数は`Program.cs`起動シーケンス内で必ず呼ばれるため、Integration/配下の全テストファイル（2.17.7節）が結合テストのアプリ起動を通じて間接的に検証する（各Stageの既定テンプレートが5件seedされることは、`TemplateEndpointsTests.cs`・`LoopEndpointsTests.cs`双方の前提条件として自然にカバーされる）。独立した単体テストファイルは追加しない。
 
