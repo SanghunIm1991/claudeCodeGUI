@@ -32,9 +32,32 @@
 
 `renderIssueDetail`自体のシグネチャ・他の処理・呼び出し元（`selectIssue`）との関係は一切変更しない。新規のJS関数・イベントハンドラも不要である（静的な初期HTML文字列の変更のみ）。
 
-**プレースホルダを消す新規ロジックを追加しない設計判断**: `logView.textContent = ""`という代入は、`#run-log`の子要素（プレースホルダの`<div class="log-view-placeholder">`を含む）をすべて破棄してから空文字列に置き換える標準的なDOM操作であり、対象がプレースホルダであろうと通常のログ行であろうと区別なく動作する。したがって、`connectRunStream`（COMP-12 2.12.1節手順4）・`startRun`（COMP-13 2.13.2節、既存183〜186行目相当）のいずれも変更する必要がなく、実際に変更しない。REQ-04が要求する「プレースホルダを消す」動作は、これら既存2箇所の`logView.textContent = ""`という副作用に完全に依存し、新規のクリア専用コードを追加しない設計とする。
+**プレースホルダを消す新規ロジックを追加しない設計判断**:
+
+- `logView.textContent = ""`という代入は、`#run-log`の子要素（プレースホルダの`<div class="log-view-placeholder">`を含む）をすべて破棄してから空文字列に置き換える標準的なDOM操作であり、対象がプレースホルダであろうと通常のログ行であろうと区別なく動作する。
+- したがって、`connectRunStream`（COMP-12 2.12.1節手順4）・`startRun`（COMP-13 2.13.2節、既存183〜186行目相当）のいずれも変更する必要がなく、実際に変更しない。
+- REQ-04が要求する「プレースホルダを消す」動作は、これら既存2箇所の`logView.textContent = ""`という副作用に完全に依存し、新規のクリア専用コードを追加しない設計とする。
 
 #### 2.15.2 プレースホルダが消えるタイミングの整理
+
+各契機とプレースホルダの状態遷移の関係を図示すると以下のとおり（`#`は下表の行番号に対応）。詳細な条件・根拠は表を参照。
+
+```mermaid
+flowchart TD
+    Sel["Issueを選択（selectIssue）"] --> Running{"status===running\nのRunがある?"}
+    Running -->|"なし（#1）"| Placeholder1["プレースホルダを表示\n（renderIssueDetail初期HTML）"]
+    Running -->|"あり（#2）"| CRS1["connectRunStream呼び出し\n手順4: textContent=&quot;&quot;"] --> Cleared["プレースホルダが消え\nログ行を逐次追記"]
+
+    RunStart["「実行」ボタン（run-start）\nクリック → startRun（#3）"] --> Clear1["POST送信前に\ntextContent=&quot;&quot;"] --> CRS1
+
+    LoopStart["「自律ループ開始」ボタン\n（loop-start）→ startLoop（#4・#5）"] --> LoopOk{"POST成功?"}
+    LoopOk -->|"Yes（#4）"| CRS1
+    LoopOk -->|"No・400/409で\nfinishRun未呼出（#5）"| NoChange["connectRunStreamは呼ばれず\n#run-logは変更されない"]
+
+    Finish["Runが終了 → finishRun（#6）"] --> NoTouch["#run-logの内容には\n一切触れない"]
+
+    Reselect["完了済みRunのIssueを\n再選択（#7）"] --> Placeholder1
+```
 
 **代表的な境界値・分岐条件**:
 
