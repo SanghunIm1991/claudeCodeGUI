@@ -11,7 +11,11 @@
 1. `src/ClaudeCodeGui.Tests/`という新規プロジェクトの構成（csproj設定・フォルダ構成）
 2. 各テストファイルが対象とする実装関数・エンドポイントの対応関係、および単体/結合の区分
 
-**本節が扱わない事項（テスト工程`docs/04_test/`の役割）**: 個々のテストケースの詳細（具体的な入力値・期待値・テストID・テストデータの由来管理）は、本節では確定させない。これらはCOMP-05〜16の各関数設計書（COMP-05.md〜COMP-16.mdの「境界値・分岐条件」表）に既にテストケース設計へ転用可能な粒度で記載済みであり、`docs/04_test/`のテスト仕様書がこれらを参照してテストID（REQ-xx/FUNC-xx起点）を付与し、`test-strategy`スキルが定める列（テストID・対応要件ID・対応関数ID・テストレベル・由来）を持つ一覧として正式化する。本節の各テストファイルは「入れ物」の確定に留め、中身のテストメソッド名・Theory/InlineDataの具体的な値までは規定しない。
+**本節が扱わない事項（テスト工程`docs/04_test/`の役割）**: 個々のテストケースの詳細（具体的な入力値・期待値・テストID・テストデータの由来管理）は、本節では確定させない。
+
+これらはCOMP-05〜16の各関数設計書（COMP-05.md〜COMP-16.mdの「境界値・分岐条件」表）に既にテストケース設計へ転用可能な粒度で記載済みであり、`docs/04_test/`のテスト仕様書がこれらを参照してテストID（REQ-xx/FUNC-xx起点）を付与し、`test-strategy`スキルが定める列（テストID・対応要件ID・対応関数ID・テストレベル・由来）を持つ一覧として正式化する。
+
+本節の各テストファイルは「入れ物」の確定に留め、中身のテストメソッド名・Theory/InlineDataの具体的な値までは規定しない。
 
 ## 2.17.1 `ClaudeCodeGui.Tests.csproj`
 
@@ -74,7 +78,9 @@ src/ClaudeCodeGui.Tests/
 
 ## 2.17.2 discovered issue: `WebApplicationFactory<Program>`のための`Program`クラスのアクセシビリティ
 
-**発見した確認事項**: `src/ClaudeCodeGui/Program.cs`（1〜194行目）を確認したところ、トップレベルステートメント形式で記述されており、C#コンパイラが自動生成する`Program`クラスは既定で`internal`アクセシビリティになる（.NET標準仕様）。`WebApplicationFactory<Program>`（`Microsoft.AspNetCore.Mvc.Testing`）は型引数`Program`を別アセンブリ（`ClaudeCodeGui.Tests`）から参照する必要があるため、このままでは`ClaudeCodeGuiWebApplicationFactory : WebApplicationFactory<Program>`（2.17.8節）がコンパイルエラーになる。
+**発見した確認事項**: `src/ClaudeCodeGui/Program.cs`（1〜194行目）を確認したところ、トップレベルステートメント形式で記述されており、C#コンパイラが自動生成する`Program`クラスは既定で`internal`アクセシビリティになる（.NET標準仕様）。
+
+`WebApplicationFactory<Program>`（`Microsoft.AspNetCore.Mvc.Testing`）は型引数`Program`を別アセンブリ（`ClaudeCodeGui.Tests`）から参照する必要があるため、このままでは`ClaudeCodeGuiWebApplicationFactory : WebApplicationFactory<Program>`（2.17.8節）がコンパイルエラーになる。
 
 **対応（実装工程での必須の軽微な変更）**: `src/ClaudeCodeGui/Program.cs`の末尾（194行目、既存の`record`定義群の後）に以下の1行を追加する。
 
@@ -82,13 +88,20 @@ src/ClaudeCodeGui.Tests/
 public partial class Program { }
 ```
 
-これはASP.NET Core公式の結合テスト構成パターン（トップレベルステートメント形式のWebアプリを`WebApplicationFactory<Program>`でテストする際の標準的な対応）であり、`Program`クラスの既存の動作（コンパイラ生成の`partial`クラスへメンバーを追加せず、空の`public`宣言を重ねるだけ）には一切影響しない。COMP-11（`Program.cs`、完了済み）の確定済み内容（DI登録・エンドポイント定義・起動時処理）を変更するものではないため、COMP-11の関数設計をやり直す必要はないが、COMP-17（本コンポーネント）の実装着手時に`Program.cs`側へこの1行を追加する必要がある点を申し送る。
+これはASP.NET Core公式の結合テスト構成パターン（トップレベルステートメント形式のWebアプリを`WebApplicationFactory<Program>`でテストする際の標準的な対応）であり、`Program`クラスの既存の動作（コンパイラ生成の`partial`クラスへメンバーを追加せず、空の`public`宣言を重ねるだけ）には一切影響しない。
+
+COMP-11（`Program.cs`、完了済み）の確定済み内容（DI登録・エンドポイント定義・起動時処理）を変更するものではないため、COMP-11の関数設計をやり直す必要はないが、COMP-17（本コンポーネント）の実装着手時に`Program.cs`側へこの1行を追加する必要がある点を申し送る。
 
 ## 2.17.3 discovered issue: テスト用`runtime-data`一時ディレクトリの分離方法
 
 **現状の実装の制約**: `Program.cs` 7行目は`var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "runtime-data");`であり、`JsonFileStore<Issue>`/`JsonFileStore<PromptTemplate>`/`JsonFileStore<Run>`（10〜12行目）・`ClaudeRunEngine`のログ格納先（COMP-05）・`OrphanSweepService`の各パス（COMP-10 2.10.0節）は、いずれもこの単一の`dataRoot`から導出される。設定キー経由で`dataRoot`を差し替える手段は現状存在しない。
 
-`WebApplicationFactory<Program>`は既定では`ContentRootPath`をテストプロジェクトのビルド出力ディレクトリ等から解決するため、`ContentRootPath`を変更せずに`dataRoot`だけをテスト用の一時ディレクトリへ差し替えることができない。`UseContentRoot(tempDir)`で`ContentRootPath`自体を差し替える方法も検討したが、その場合`appsettings.json`・`wwwroot`の解決も同時に一時ディレクトリ基準へ変わってしまい、`ClaudeCli:MockMode`等の設定上書き（2.17.8節）との組み合わせが複雑になる。
+`WebApplicationFactory<Program>`は既定では`ContentRootPath`をテストプロジェクトのビルド出力ディレクトリ等から解決するため、`ContentRootPath`を変更せずに`dataRoot`だけをテスト用の一時ディレクトリへ差し替えることができない。以下の代替案も検討したが、いずれも採用しなかった。
+
+| 検討した方法 | 却下理由 |
+|---|---|
+| `ContentRootPath`を変更せず`dataRoot`だけを差し替える | `WebApplicationFactory<Program>`は既定で`ContentRootPath`をテストプロジェクトのビルド出力ディレクトリ等から解決するため、変更する手段が現状存在しない |
+| `UseContentRoot(tempDir)`で`ContentRootPath`自体を差し替える | `appsettings.json`・`wwwroot`の解決も同時に一時ディレクトリ基準へ変わってしまい、`ClaudeCli:MockMode`等の設定上書き（2.17.8節）との組み合わせが複雑になる |
 
 **対応（実装工程での軽量な変更を提案）**: `Program.cs` 7行目を以下のとおり変更し、設定キー`DataRoot`が指定されていればそれを優先する。
 
@@ -97,22 +110,41 @@ var dataRoot = builder.Configuration["DataRoot"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "runtime-data");
 ```
 
-`appsettings.json`に`DataRoot`キーは追加しない（未設定時は既存どおり`ContentRootPath`基準のパスとなり、本番動作に一切影響しない）。結合テスト側は`ClaudeCodeGuiWebApplicationFactory`（2.17.8節）が`ConfigureAppConfiguration`でこの`DataRoot`キーにテスト用一時ディレクトリの絶対パスを注入することで、`Issue`/`PromptTemplate`/`Run`の各ストア・ログファイル・孤児Run退避先を含む`runtime-data`配下の全データを実データ（`src/ClaudeCodeGui/runtime-data/`）と完全に分離できる。
+```mermaid
+flowchart TD
+    Start(["Program.cs 起動"]) --> Check{"Configuration[\"DataRoot\"]\nが設定されている?"}
+    Check -->|Yes（結合テスト時）| UseConfig["dataRoot = Configuration[\"DataRoot\"]"]
+    Check -->|No（本番動作時）| UseDefault["dataRoot = ContentRootPath + \"runtime-data\""]
+```
+
+`appsettings.json`に`DataRoot`キーは追加しない（未設定時は既存どおり`ContentRootPath`基準のパスとなり、本番動作に一切影響しない）。
+
+結合テスト側は`ClaudeCodeGuiWebApplicationFactory`（2.17.8節）が`ConfigureAppConfiguration`でこの`DataRoot`キーにテスト用一時ディレクトリの絶対パスを注入することで、`Issue`/`PromptTemplate`/`Run`の各ストア・ログファイル・孤児Run退避先を含む`runtime-data`配下の全データを実データ（`src/ClaudeCodeGui/runtime-data/`）と完全に分離できる。
 
 この変更はCLAUDE.md品質方針が求める「軽量な型・入力ガード等の実コード修正をデフォルトの対応として提案する」に沿った、既存動作を変えない後方互換の1行差分であり、COMP-11の確定済みDI登録・エンドポイント定義への変更は伴わない（`dataRoot`の値を後続で参照する`Program.cs`10〜14・28〜35行目のコードはそのまま）。
 
 ## 2.17.4 discovered gap: 追加すべき単体テストファイル（発見・上流ドキュメントへ反映済み）
 
-component_design.md 706〜724行目は現在Unit/配下9ファイルを確定させているが、これはCOMP-17自体の当初のコンポーネント設計時点（COMP-11着手前）ではUnit/配下7ファイルであり、当時の単体テスト方針は「COMP-05〜COMP-10で切り出した静的・純粋関数」と明記していた。本節ではその後確定したCOMP-03・COMP-11にも同種の静的純粋関数が存在することを発見した。
+component_design.md 706〜724行目は現在Unit/配下9ファイルを確定させているが、これはCOMP-17自体の当初のコンポーネント設計時点（COMP-11着手前）ではUnit/配下7ファイルであり、当時の単体テスト方針は「COMP-05〜COMP-10で切り出した静的・純粋関数」と明記していた。
+
+本節ではその後確定したCOMP-03・COMP-11にも同種の静的純粋関数が存在することを発見した。
 
 | 発見した関数 | 所属 | 性質 | 対応 |
 |---|---|---|---|
 | `PromptTemplateDefaultResolver.ResolveDemotions(IReadOnlyList<PromptTemplate> allTemplates, PromptTemplate candidate)` | COMP-03 2.3.2節 | 純粋関数（ストア等への副作用なし、NFR-03明記） | `Unit/PromptTemplateDefaultResolverTests.cs`を新規追加 |
 | `IssueUpdateValidator.IsKnownStage(string? stage)` / `IsKnownPermissionMode(string? mode)` | COMP-11 2.11.3節 | 純粋関数（同上、NFR-03明記） | `Unit/IssueUpdateValidatorTests.cs`を新規追加 |
 
-いずれもNFR-03「静的・純粋関数を優先してカバーする」という単体テスト方針そのものが要求する対象である。この発見を受け、独立レビューにて「本来は上流ドキュメント側を先に改訂すべき設計判断」と判定されたため、component_design.md 3.6節を事後改訂し（コミット`ea71a51`）、Unit/配下を正式に9ファイル（本表の`PromptTemplateDefaultResolverTests.cs`・`IssueUpdateValidatorTests.cs`を含む）として確定させた（component_design.md 706〜724行目のプロジェクト構成、および726行目の注記を参照）。したがって本節はcomponent_design.mdの確定内容と矛盾するものではなく、両ドキュメントは現時点で整合している。境界値・分岐条件はそれぞれCOMP-03 2.3.2節「代表的な境界値・分岐条件」表、COMP-11 2.11.3節「代表的な境界値・分岐条件」表（#1〜8）にテストケース設計へ転用可能な粒度で既に記載済みであり、本節では重複記載しない。
+いずれもNFR-03「静的・純粋関数を優先してカバーする」という単体テスト方針そのものが要求する対象である。
 
-**追加しない判断をした関数（参考）**: `TemplateSeeder.SeedDefaultsAsync`（COMP-03 2.3.3節、既存関数の変更）は副作用（`store.GetAllAsync`/`SaveAsync`）を伴い純粋関数ではないため、NFR-03の単体テスト優先対象には該当しない。この関数は`Program.cs`起動シーケンス内で必ず呼ばれるため、Integration/配下の全テストファイル（2.17.7節）が結合テストのアプリ起動を通じて間接的に検証する（各Stageの既定テンプレートが5件seedされることは、`TemplateEndpointsTests.cs`・`LoopEndpointsTests.cs`双方の前提条件として自然にカバーされる）。独立した単体テストファイルは追加しない。
+この発見を受け、独立レビューにて「本来は上流ドキュメント側を先に改訂すべき設計判断」と判定されたため、component_design.md 3.6節を事後改訂し（コミット`ea71a51`）、Unit/配下を正式に9ファイル（本表の`PromptTemplateDefaultResolverTests.cs`・`IssueUpdateValidatorTests.cs`を含む）として確定させた（component_design.md 706〜724行目のプロジェクト構成、および726行目の注記を参照）。
+
+したがって本節はcomponent_design.mdの確定内容と矛盾するものではなく、両ドキュメントは現時点で整合している。
+
+境界値・分岐条件はそれぞれCOMP-03 2.3.2節「代表的な境界値・分岐条件」表、COMP-11 2.11.3節「代表的な境界値・分岐条件」表（#1〜8）にテストケース設計へ転用可能な粒度で既に記載済みであり、本節では重複記載しない。
+
+**追加しない判断をした関数（参考）**: `TemplateSeeder.SeedDefaultsAsync`（COMP-03 2.3.3節、既存関数の変更）は副作用（`store.GetAllAsync`/`SaveAsync`）を伴い純粋関数ではないため、NFR-03の単体テスト優先対象には該当しない。
+
+この関数は`Program.cs`起動シーケンス内で必ず呼ばれるため、Integration/配下の全テストファイル（2.17.7節）が結合テストのアプリ起動を通じて間接的に検証する（各Stageの既定テンプレートが5件seedされることは、`TemplateEndpointsTests.cs`・`LoopEndpointsTests.cs`双方の前提条件として自然にカバーされる）。独立した単体テストファイルは追加しない。
 
 `ToRunStartResponse`（COMP-11 2.11.7節）はローカル関数（`Program.cs`内で`static IResult ToRunStartResponse(...)`として定義）であり、`ClaudeCodeGui.Tests`側からは直接参照できない（C#のローカル関数は宣言元スコープの外から呼び出し不能）。したがって単体テスト対象にはできず、`Integration/RunEndpointsTests.cs`・`Integration/LoopEndpointsTests.cs`がHTTPレスポンス（`202 Accepted`/`409 Conflict`）を通じて間接的に検証する（2.17.7節）。
 
@@ -134,7 +166,9 @@ component_design.md 706〜724行目は現在Unit/配下9ファイルを確定さ
 
 **確認事項**: `src/ClaudeCodeGui/Services/ArtifactService.cs`（49〜58行目）を確認したところ、`ResolveWithinRoot(string rootPath, string relativePath)`は`private static`である。component_design.md・COMP-17節が「`ResolveWithinRoot`（既存ロジック、未整備だったため追加）」と記載しているが、`private`メンバーは`ClaudeCodeGui.Tests`アセンブリから直接呼び出すことができない（リフレクションを用いれば技術的には可能だが、他の全単体テスト対象――`ShouldUseMock`・`IsWithinAllowedRoots`・`Evaluate`等――がいずれも`public static`である本プロジェクトの一貫したテスト容易性方針と整合しない）。
 
-**対応**: `ResolveWithinRoot`を直接呼び出すのではなく、これを内部で使用する`public`メソッド`ArtifactService.List(string rootPath, string relativeDir)`・`ReadFile(string rootPath, string relativePath)`・`WriteFile(string rootPath, string relativePath, string content)`（`ArtifactService.cs` 11〜40行目）を経由して間接的に検証する。具体的には以下の観点をテストケースとして設計する（詳細な入力値・期待値の確定は`docs/04_test/`の役割、2.17.0節）。
+**対応**: `ResolveWithinRoot`を直接呼び出すのではなく、これを内部で使用する`public`メソッド`ArtifactService.List(string rootPath, string relativeDir)`・`ReadFile(string rootPath, string relativePath)`・`WriteFile(string rootPath, string relativePath, string content)`（`ArtifactService.cs` 11〜40行目）を経由して間接的に検証する。
+
+具体的には以下の観点をテストケースとして設計する（詳細な入力値・期待値の確定は`docs/04_test/`の役割、2.17.0節）。
 
 | # | 検証観点 | 期待される挙動 |
 |---|---|---|
