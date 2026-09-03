@@ -40,6 +40,6 @@
 | [COMP-12](COMP-12.md) SSE自動再接続・実行中Run検出 | `src/ClaudeCodeGui/wwwroot/app.js` | 完了 |
 | [COMP-13](COMP-13.md) 排他制御拒否時のUX誘導 | `src/ClaudeCodeGui/wwwroot/app.js` | 完了 |
 | [COMP-14](COMP-14.md) 自律ループ操作UI | `src/ClaudeCodeGui/wwwroot/app.js`, `styles.css` | 完了 |
-| [COMP-15](COMP-15.md) GUI配置の改善 | `src/ClaudeCodeGui/wwwroot/app.js`, `styles.css` | ラウンド1軽微指摘1件が開発サブエージェントの修正待ち（再レビューは省略予定。`docs/review_log.md`参照） |
+| [COMP-15](COMP-15.md) GUI配置の改善 | `src/ClaudeCodeGui/wwwroot/app.js`, `styles.css` | 完了 |
 | COMP-16 テンプレート既定フラグの編集UI | `wwwroot/app.js`, `wwwroot/index.html` | 未着手 |
 | COMP-17 `ClaudeCodeGui.Tests`（新規プロジェクト） | `src/ClaudeCodeGui.Tests/` | 未着手 |
