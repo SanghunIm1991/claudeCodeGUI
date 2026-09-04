@@ -96,7 +96,7 @@ COMP-11（`Program.cs`、完了済み）の確定済み内容（DI登録・エ�
 
 **現状の実装の制約**: `Program.cs` 7行目は`var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "runtime-data");`であり、`JsonFileStore<Issue>`/`JsonFileStore<PromptTemplate>`/`JsonFileStore<Run>`（10〜12行目）・`ClaudeRunEngine`のログ格納先（COMP-05）・`OrphanSweepService`の各パス（COMP-10 2.10.0節）は、いずれもこの単一の`dataRoot`から導出される。設定キー経由で`dataRoot`を差し替える手段は現状存在しない。
 
-`WebApplicationFactory<Program>`は既定では`ContentRootPath`をテストプロジェクトのビルド出力ディレクトリ等から解決するため、`ContentRootPath`を変更せずに`dataRoot`だけをテスト用の一時ディレクトリへ差し替えることができない。以下の代替案も検討したが、いずれも採用しなかった。
+テスト用の一時ディレクトリへ`dataRoot`を差し替える方法として、以下の代替案も検討したが、いずれも採用しなかった（却下理由は下表のとおり）。
 
 | 検討した方法 | 却下理由 |
 |---|---|
